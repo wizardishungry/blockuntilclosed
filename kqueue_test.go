@@ -44,8 +44,6 @@ func TestKqueueDoStuffAndClose(t *testing.T) {
 
 	}()
 
-	const waitTime = 100 * time.Millisecond
-
 	go func() {
 		defer wg.Done()
 		conn, err := net.DialTCP("tcp", nil, l.Addr().(*net.TCPAddr))

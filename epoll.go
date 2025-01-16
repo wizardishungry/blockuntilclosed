@@ -74,6 +74,10 @@ func (ep *Epoll) SetLogger(logger *log.Logger) {
 	ep.logger = logger
 }
 
+func (ep *Epoll) getMap() *closeMap {
+	return &ep.m
+}
+
 func (ep *Epoll) Close() error {
 	return ep.closeOnce()
 }

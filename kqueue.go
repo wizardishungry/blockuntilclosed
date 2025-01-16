@@ -75,6 +75,10 @@ func (kq *KQueue) SetLogger(logger *log.Logger) {
 	kq.logger = logger
 }
 
+func (kq *KQueue) getMap() *closeMap {
+	return &kq.m
+}
+
 func (kq *KQueue) close() error {
 	err := errors.Join(
 		kq.pipeRead.Close(),
