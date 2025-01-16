@@ -37,6 +37,10 @@ func NewKQueue() *KQueue {
 	}
 }
 
+func (kq *KQueue) SetLogger(logger *log.Logger) {
+	kq.logger = logger
+}
+
 func (kq *KQueue) Close() error {
 	kq.pipeRead.Close()
 	kq.pipeWrite.Close()

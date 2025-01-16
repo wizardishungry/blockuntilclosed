@@ -81,16 +81,14 @@ func TestTCP(t *testing.T) {
 }
 
 func BenchmarkTCP(b *testing.B) {
-	_ = DefaultBackend()
-
 	oldBackend := defaultBackend
 	b.Cleanup(func() {
 		defaultBackend = oldBackend
 	})
 
-	kq := NewKQueue()
-	kq.logger = log.New(io.Discard, "", 0)
-	defaultBackend = kq
+	be := NewDefaultBackend()
+	be.SetLogger(log.New(io.Discard, "", 0))
+	defaultBackend = be
 
 	test := func(b *testing.B, doDone, waitDone bool) {
 		// Start a TCP server

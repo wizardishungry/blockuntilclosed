@@ -7,6 +7,7 @@ import (
 
 type Backend interface {
 	Done(fd uintptr) <-chan struct{}
+	SetLogger(logger *log.Logger)
 }
 
 var (
@@ -20,7 +21,11 @@ var (
 
 func DefaultBackend() Backend {
 	defaultBackendOnce.Do(func() {
-		defaultBackend = defaultBackendFunc()
+		defaultBackend = NewDefaultBackend()
 	})
 	return defaultBackend
+}
+
+func NewDefaultBackend() Backend {
+	return defaultBackendFunc()
 }
