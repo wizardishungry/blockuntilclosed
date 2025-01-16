@@ -59,6 +59,7 @@ func (ep *Epoll) Done(fd uintptr) <-chan struct{} {
 		defer close(c)
 		events := make([]unix.EpollEvent, 1)
 		for {
+			// TODO need to catch interrupted system call
 			n, err := unix.EpollWait(epollFD, events, -1)
 			if err != nil {
 				ep.logger.Printf("unix.EpollWait(): %v", err)
@@ -68,7 +69,7 @@ func (ep *Epoll) Done(fd uintptr) <-chan struct{} {
 				ep.logger.Printf("unix.EpollWait(): no events")
 				return
 			}
-			ep.logger.Printf("unix.EpollWait(): %+v", events[0])
+			// ep.logger.Printf("unix.EpollWait(): %+v", events[0])
 			return
 		}
 	}()

@@ -86,11 +86,11 @@ func BenchmarkTCP(b *testing.B) {
 		defaultBackend = oldBackend
 	})
 
-	be := NewDefaultBackend()
-	be.SetLogger(log.New(io.Discard, "", 0))
-	defaultBackend = be
-
 	test := func(b *testing.B, doDone, waitDone bool) {
+		be := NewDefaultBackend()
+		be.SetLogger(log.New(io.Discard, "", 0))
+		defaultBackend = be
+
 		// Start a TCP server
 		ln, err := net.ListenTCP("tcp", &net.TCPAddr{
 			IP:   net.IPv4(127, 0, 0, 1),
