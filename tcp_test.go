@@ -2,6 +2,8 @@ package blockuntilclosed
 
 import (
 	"context"
+	"io"
+	"log"
 	"net"
 	"sync"
 	"testing"
@@ -76,4 +78,85 @@ func TestTCP(t *testing.T) {
 		t.Fatalf("expected to wait at least %v, but waited %v", waitTime, dur)
 	}
 	t.Log("waited", dur)
+}
+
+func BenchmarkTCP(b *testing.B) {
+	_ = DefaultBackend()
+
+	oldBackend := defaultBackend
+	b.Cleanup(func() {
+		defaultBackend = oldBackend
+	})
+
+	kq := NewKQueue()
+	kq.logger = log.New(io.Discard, "", 0)
+	defaultBackend = kq
+
+	test := func(b *testing.B, doDone bool) {
+		// Start a TCP server
+		ln, err := net.ListenTCP("tcp", &net.TCPAddr{
+			IP:   net.IPv4(127, 0, 0, 1),
+			Port: 0,
+		})
+		if err != nil {
+			b.Fatalf("failed to start TCP server: %v", err)
+		}
+		defer ln.Close()
+
+		// Accept connections in a separate goroutine
+		go func() {
+			for {
+				conn, err := ln.AcceptTCP()
+				if err != nil {
+					return
+				}
+				go handleConnection(conn, doDone)
+			}
+		}()
+
+		// Run the benchmark
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			conn, err := net.Dial("tcp", ln.Addr().String())
+			if err != nil {
+				b.Fatalf("failed to connect to TCP server: %v", err)
+			}
+
+			_, err = conn.Write([]byte("hello"))
+			if err != nil {
+				b.Fatalf("failed to write to TCP server: %v", err)
+			}
+
+			buf := make([]byte, 5)
+			_, err = conn.Read(buf)
+			if err != nil {
+				b.Fatalf("failed to read from TCP server: %v", err)
+			}
+
+			conn.Close()
+		}
+	}
+
+	b.Run("withoutDone", func(b *testing.B) {
+		test(b, false)
+	})
+
+	b.Run("withDone", func(b *testing.B) {
+		test(b, true)
+	})
+}
+
+func handleConnection(conn *net.TCPConn, doDone bool) {
+	defer conn.Close()
+
+	if doDone {
+		done := Done(conn)
+		defer func() {
+			<-done
+		}()
+	}
+
+	buf := make([]byte, 5)
+	conn.Read(buf)
+	conn.Write(buf)
 }
