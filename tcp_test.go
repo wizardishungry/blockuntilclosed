@@ -81,7 +81,7 @@ func TestTCP(t *testing.T) {
 }
 
 func BenchmarkTCP(b *testing.B) {
-	oldBackend := defaultBackend
+	oldBackend := DefaultBackend()
 	b.Cleanup(func() {
 		defaultBackend = oldBackend
 	})
