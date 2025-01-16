@@ -3,10 +3,11 @@ package blockuntilclosed
 import (
 	"log"
 	"sync"
+	"syscall"
 )
 
 type Backend interface {
-	Done(fd uintptr) <-chan struct{}
+	Done(sconn syscall.RawConn, fd uintptr) <-chan struct{}
 	SetLogger(logger *log.Logger)
 }
 

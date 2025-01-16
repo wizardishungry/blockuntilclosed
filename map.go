@@ -1,37 +1,45 @@
 package blockuntilclosed
 
-import "sync"
+import (
+	"runtime"
+	"sync"
+	"syscall"
+)
 
-type closeMap[T comparable] struct {
-	m sync.Map // m map[T]chan struct{}
+type closeMap struct {
+	m sync.Map // map[uintptr] *closeMapPayload
 }
 
-func newCloseMap[T comparable]() *closeMap[T] {
-	return &closeMap[T]{
-		m: sync.Map{},
-	}
+type closeMapPayload struct {
+	sconn syscall.RawConn // keep a reference to the syscall.RawConn so the finalizer doesn't run before the callback; fingers crossed.
+	c     chan struct{}
 }
 
-func (cm *closeMap[T]) Close(key T) bool {
+func (cm *closeMap) Close(key uintptr) bool {
 	v, loaded := cm.m.LoadAndDelete(key)
 	if !loaded {
 		return false
 	}
-	if c, ok := v.(chan struct{}); ok {
-		close(c)
+	if payload, ok := v.(*closeMapPayload); ok {
+		close(payload.c)
 		return true
 	}
 	return false // May have already been closed
 }
 
-func (cm *closeMap[T]) Add(key T) (loaded bool, c chan struct{}) {
-	c = make(chan struct{})
-	v, loaded := cm.m.LoadOrStore(key, c)
+func (cm *closeMap) Add(key uintptr, sconn syscall.RawConn) (loaded bool, _ *closeMapPayload) {
+	c := make(chan struct{})
+	payload := &closeMapPayload{
+		sconn: sconn,
+		c:     c,
+	}
+	v, loaded := cm.m.LoadOrStore(key, payload)
 	if !loaded {
-		return false, c
+		return false, payload
 	}
-	if c, ok := v.(chan struct{}); ok {
-		return true, c
+	if p, ok := v.(*closeMapPayload); ok {
+		return true, p
 	}
+
 	return false, nil // This is an error
 }

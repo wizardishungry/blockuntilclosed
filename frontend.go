@@ -54,7 +54,7 @@ func (fe *frontend) Done(conn Conn) <-chan struct{} {
 		done <-chan struct{}
 	)
 	if err := sconn.Control(func(fd uintptr) {
-		done = fe.backend.Done(fd)
+		done = fe.backend.Done(sconn, fd)
 	}); err != nil {
 		fe.logger.Printf("sconn.Control(): %v", err)
 	}

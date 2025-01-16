@@ -8,6 +8,7 @@ import (
 	"log"
 	"os"
 	"sync"
+	"syscall"
 
 	"golang.org/x/sys/unix"
 )
@@ -42,7 +43,7 @@ type KQueue struct {
 	kqfd                int
 	closeOnce           func() error
 	allDone             chan struct{}
-	m                   closeMap[uintptr]
+	m                   closeMap
 }
 
 func NewKQueue() *KQueue {
@@ -59,7 +60,7 @@ func NewKQueue() *KQueue {
 		logger:    logger,
 		allDone:   make(chan struct{}),
 		closeOnce: nil,
-		m:         closeMap[uintptr]{},
+		m:         closeMap{},
 	}
 	kq.closeOnce = sync.OnceValue(kq.close)
 
@@ -86,22 +87,27 @@ func (kq *KQueue) Close() error {
 	return kq.closeOnce()
 }
 
-func (kq *KQueue) Done(fd uintptr) <-chan struct{} {
+func (kq *KQueue) Done(sconn syscall.RawConn, fd uintptr) <-chan struct{} {
 	select {
 	case <-kq.allDone:
 		return nil
 	default:
 	}
 
-	loaded, c := kq.m.Add(fd)
-	if loaded && c == nil {
+	loaded, payload := kq.m.Add(fd, sconn)
+	if payload == nil {
+		kq.logger.Print("nil payload; this is a problem")
+		return nil
+	}
+
+	if loaded && payload.c == nil {
 		kq.logger.Print("loaded and nil; this is a problem")
 		return nil
 	}
 
-	if c == nil {
-		kq.logger.Print("stored and nil; this is a problem")
-		return nil
+	if loaded {
+		// Already added
+		return payload.c
 	}
 
 	eventsIn := [...]unix.Kevent_t{{
@@ -130,7 +136,7 @@ RETRY:
 		return nil
 	}
 
-	return c
+	return payload.c
 }
 
 func (kq *KQueue) startKQueue() error {
