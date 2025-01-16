@@ -30,13 +30,11 @@ func WithBackend(b Backend) Frontend {
 
 type frontend struct {
 	backend Backend
-	cache   map[Conn]<-chan struct{}
 }
 
 func newFrontend(b Backend) *frontend {
 	return &frontend{
 		backend: b,
-		cache:   make(map[Conn]<-chan struct{}),
 	}
 }
 
@@ -55,6 +53,7 @@ func (fe *frontend) Done(conn Conn) <-chan struct{} {
 	}); err != nil {
 		log.Printf("sconn.Control(): %v", err)
 	}
+
 	return done
 }
 
