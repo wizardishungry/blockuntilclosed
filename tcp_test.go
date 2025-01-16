@@ -92,7 +92,7 @@ func BenchmarkTCP(b *testing.B) {
 	kq.logger = log.New(io.Discard, "", 0)
 	defaultBackend = kq
 
-	test := func(b *testing.B, doDone bool) {
+	test := func(b *testing.B, doDone, waitDone bool) {
 		// Start a TCP server
 		ln, err := net.ListenTCP("tcp", &net.TCPAddr{
 			IP:   net.IPv4(127, 0, 0, 1),
@@ -110,7 +110,7 @@ func BenchmarkTCP(b *testing.B) {
 				if err != nil {
 					return
 				}
-				go handleConnection(conn, doDone)
+				go handleConnection(conn, doDone, waitDone)
 			}
 		}()
 
@@ -137,19 +137,30 @@ func BenchmarkTCP(b *testing.B) {
 		}
 	}
 
-	b.Run("withoutDone", func(b *testing.B) {
-		test(b, false)
+	b.Run("baseline", func(b *testing.B) {
+		test(b, false, false)
 	})
 
-	b.Run("withDone", func(b *testing.B) {
-		test(b, true)
+	b.Run("doDone", func(b *testing.B) {
+		test(b, true, false)
+	})
+	b.Run("waitDone", func(b *testing.B) {
+		test(b, false, true)
 	})
 }
 
-func handleConnection(conn *net.TCPConn, doDone bool) {
+func handleConnection(conn *net.TCPConn, doDone, waitDone bool) {
 	defer conn.Close()
 
 	if doDone {
+		done := Done(conn)
+		defer func() {
+			select {
+			case <-done:
+			default:
+			}
+		}()
+	} else if waitDone {
 		done := Done(conn)
 		defer func() {
 			<-done
