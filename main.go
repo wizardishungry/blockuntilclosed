@@ -16,7 +16,7 @@ type Conn interface {
 }
 
 // Done blocks until a file descriptor is closed.
-func Done(conn Conn) (<-chan struct{}, error) {
+func Done(conn Conn) <-chan struct{} {
 	return WithBackend(DefaultBackend()).Done(conn)
 }
 

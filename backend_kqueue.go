@@ -3,7 +3,7 @@
 package blockuntilclosed
 
 import (
-	"fmt"
+	"log"
 	"os"
 
 	"golang.org/x/sys/unix"
@@ -19,17 +19,21 @@ func init() {
 // Do not initialize this struct directly, use NewKQueue instead.
 type KQueue struct {
 	pipeRead, pipeWrite *os.File
+	logger              *log.Logger
 }
 
 func NewKQueue() *KQueue {
+	logger := log.New(os.Stderr, "KQueue: ", log.LstdFlags)
+
 	pipeRead, pipeWrite, err := os.Pipe()
 	if err != nil {
-		panic(fmt.Errorf("os.Pipe(): %w", err))
+		logger.Fatalf("os.Pipe(): %v", err)
 	}
 
 	return &KQueue{
 		pipeRead:  pipeRead,
 		pipeWrite: pipeWrite,
+		logger:    logger,
 	}
 }
 
@@ -39,21 +43,24 @@ func (kq *KQueue) Close() error {
 	return nil
 }
 
-func (kq *KQueue) Done(fd uintptr) (<-chan struct{}, error) {
+func (kq *KQueue) Done(fd uintptr) <-chan struct{} {
 	var cancelFD uintptr
 	if kq.pipeRead != nil {
 		cancelFD = kq.pipeRead.Fd()
 	}
-	return darwin_kqueue(fd, cancelFD)
+	return kq.darwin_kqueue(fd, cancelFD)
 }
 
 // cribbed from https://gist.github.com/juanqui/7564275
-func darwin_kqueue(fd, cancelFD uintptr) (<-chan struct{}, error) {
+func (kq *KQueue) darwin_kqueue(fd, cancelFD uintptr) <-chan struct{} {
 	done := make(chan struct{})
 
-	kqfd, err := unix.Kqueue() // TODO: this kqueue should be global to avoid creating it every time
+	// TODO: this kqueue could be global to avoid creating it every time
+	// I tried this but it was late at night.
+	kqfd, err := unix.Kqueue()
 	if err != nil {
-		return nil, fmt.Errorf("unix.Kqueue(): %w", err)
+		kq.logger.Printf("unix.Kqueue(): %v", err)
+		return nil
 	}
 
 	go func() {
@@ -104,20 +111,15 @@ func darwin_kqueue(fd, cancelFD uintptr) (<-chan struct{}, error) {
 			eventsIn = append(eventsIn, ev2)
 		}
 
-		timeout := &unix.Timespec{
-			Sec:  0,
-			Nsec: 100000,
-		}
-		timeout = nil
-
 		var eventsOut [1]unix.Kevent_t
 
-		n, err := unix.Kevent(kqfd, eventsIn, eventsOut[:], timeout)
+		n, err := unix.Kevent(kqfd, eventsIn, eventsOut[:], nil)
 		if err != nil {
-			panic(fmt.Errorf("unix.Kevent(): %w", err)) // TODO revise error handling
+			log.Printf("unix.Kevent(): %v", err)
+			return
 		}
 
-		fmt.Println("got", n)
+		kq.logger.Print("kqueue events received", n)
 		gotEvent := eventsOut[0]
 
 		fromSocket := uintptr(gotEvent.Ident) == fd
@@ -126,15 +128,15 @@ func darwin_kqueue(fd, cancelFD uintptr) (<-chan struct{}, error) {
 		errorFlag := gotEvent.Flags&unix.EV_ERROR != 0
 		eofFlag := gotEvent.Flags&unix.EV_EOF != 0
 
-		fmt.Printf("gotEvent: %+v fromSocket=%+v\n", gotEvent, fromSocket)
+		kq.logger.Printf("gotEvent: %+v fromSocket=%+v\n", gotEvent, fromSocket)
 
 		if eofFlag {
-			fmt.Println("eof")
+			kq.logger.Print("got eof")
 		}
 		if errorFlag {
-			fmt.Printf("gotEvent.Flags&unix.EV_ERROR != 0: %v\n", unix.Errno(gotEvent.Data))
+			kq.logger.Printf("gotEvent.Flags&unix.EV_ERROR != 0: %v\n", unix.Errno(gotEvent.Data))
 		}
 	}()
 
-	return done, nil
+	return done
 }

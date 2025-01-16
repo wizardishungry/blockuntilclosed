@@ -3,13 +3,12 @@ package blockuntilclosed
 import (
 	"context"
 	"errors"
-	"fmt"
-	"net"
+	"log"
 	"sync"
 )
 
 type Frontend interface {
-	Done(conn Conn) (<-chan struct{}, error)
+	Done(conn Conn) <-chan struct{}
 	WithContext(ctx context.Context, conn Conn) context.Context
 }
 
@@ -41,41 +40,34 @@ func newFrontend(b Backend) *frontend {
 	}
 }
 
-func (fe *frontend) Done(conn Conn) (<-chan struct{}, error) {
+func (fe *frontend) Done(conn Conn) <-chan struct{} {
 	sconn, err := conn.SyscallConn()
 
 	if err != nil {
-		return nil, fmt.Errorf("conn.SyscallConn(): %w", err)
+		log.Printf("conn.SyscallConn(): %v", err)
+		return nil
 	}
 	var (
-		done  <-chan struct{}
-		myErr error
-		// TODO: checks for OpError should be in IsClosed as well
-		opError *net.OpError
+		done <-chan struct{}
 	)
 	if err := sconn.Control(func(fd uintptr) {
-		done, myErr = fe.backend.Done(fd)
-	}); errors.As(err, &opError) {
-		if opError.Op == "raw-control" {
-			return nil, nil // trying to call Control on a closed socket indicates that the socket is closed!
-		}
-	} else if err != nil {
-		return nil, fmt.Errorf("sconn.Control(): %w", err)
+		done = fe.backend.Done(fd)
+	}); err != nil {
+		log.Printf("sconn.Control(): %v", err)
 	}
-	return done, myErr
+	return done
 }
+
+var ErrConnClosed = errors.New("conn closed")
 
 func (fe *frontend) WithContext(ctx context.Context, conn Conn) context.Context {
 	ctx, cancelCause := context.WithCancelCause(ctx)
 	go func() {
 		defer cancelCause(nil)
-		done, err := fe.Done(conn)
-		if err != nil {
-			cancelCause(err)
-		}
+		done := fe.Done(conn)
 		select {
 		case <-done:
-			cancelCause(nil)
+			cancelCause(ErrConnClosed)
 		case <-ctx.Done():
 			cancelCause(ctx.Err())
 		}

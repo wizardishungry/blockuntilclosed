@@ -1,17 +1,19 @@
 package blockuntilclosed
 
 import (
+	"log"
 	"sync"
 )
 
 type Backend interface {
-	Done(fd uintptr) (<-chan struct{}, error)
+	Done(fd uintptr) <-chan struct{}
 }
 
 var (
 	defaultBackendOnce sync.Once
 	defaultBackendFunc func() Backend = func() Backend {
-		panic("platform unsupported")
+		log.Fatal("platform not supported")
+		return nil
 	}
 	defaultBackend Backend
 )

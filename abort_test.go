@@ -36,12 +36,8 @@ func TestAbort(t *testing.T) {
 		}
 		defer conn.Close()
 
-		done, err := Done(conn)
-		if err != nil {
-			t.Fatal("expected error")
-		}
 		select {
-		case <-done:
+		case <-Done(conn):
 			t.Fatal("expected to not receive done")
 		case <-ctx.Done():
 			t.Log("aborted")

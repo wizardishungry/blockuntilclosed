@@ -33,12 +33,8 @@ func TestTCP(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		done, err := Done(conn)
-		if err != nil {
-			t.Fatal("unexpected error")
-		}
 		select {
-		case <-done:
+		case <-Done(conn):
 			t.Log("got eof")
 		case <-ctx.Done():
 			t.Fatal("expected context to not be done")

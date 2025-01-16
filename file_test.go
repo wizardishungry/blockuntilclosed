@@ -34,11 +34,7 @@ func TestFile(t *testing.T) {
 
 	go func() {
 		defer wg.Done()
-		done, err := Done(f)
-		if err != nil {
-			t.Fatal(err)
-		}
-		<-done
+		<-Done(f)
 		t.Log("got eof")
 	}()
 
