@@ -6,6 +6,7 @@ import (
 	"errors"
 	"log"
 	"os"
+	"sync"
 	"syscall"
 
 	"golang.org/x/sys/unix"
@@ -26,6 +27,7 @@ type Epoll struct {
 	epollFD             int
 	allDone             chan struct{}
 	pipeRead, pipeWrite *os.File
+	closeOnce           func() error
 }
 
 func NewEpoll() *Epoll {
@@ -54,6 +56,7 @@ RETRY:
 		pipeWrite: pipeWrite,
 		allDone:   make(chan struct{}),
 	}
+	ep.closeOnce = sync.OnceValue(ep.close)
 
 	pipeFD := int(pipeRead.Fd())
 	err = ep.registerPipe(pipeFD)
@@ -72,6 +75,10 @@ func (ep *Epoll) SetLogger(logger *log.Logger) {
 }
 
 func (ep *Epoll) Close() error {
+	return ep.closeOnce()
+}
+
+func (ep *Epoll) close() error {
 	err := errors.Join(
 		ep.pipeRead.Close(),
 		ep.pipeWrite.Close(),
