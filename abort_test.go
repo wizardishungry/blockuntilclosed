@@ -8,7 +8,7 @@ import (
 	"time"
 )
 
-// TestAbort checks that aborting a context will stop Block from waiting.
+// TestAbort checks that aborting a context will not cause <-Done(conn) to succeed.
 func TestAbort(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -22,7 +22,6 @@ func TestAbort(t *testing.T) {
 	}
 	defer l.Close()
 
-	const waitTime = 100 * time.Millisecond
 	start := time.Now()
 
 	var wg sync.WaitGroup
