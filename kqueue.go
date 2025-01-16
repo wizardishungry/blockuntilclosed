@@ -76,11 +76,14 @@ func (kq *KQueue) SetLogger(logger *log.Logger) {
 }
 
 func (kq *KQueue) close() error {
-	close(kq.allDone)
-	return errors.Join(
+	err := errors.Join(
 		kq.pipeRead.Close(),
 		kq.pipeWrite.Close(),
 	)
+	<-kq.allDone
+	count := kq.m.Drain()
+	kq.logger.Printf("Drain(): %d", count)
+	return err
 }
 
 func (kq *KQueue) Close() error {
@@ -183,6 +186,7 @@ RETRY_Kevent:
 }
 
 func (kq *KQueue) worker(cancelFD uintptr) {
+	defer close(kq.allDone)
 	defer func() {
 		err := unix.Close(kq.kqfd)
 		if err != nil {
@@ -191,11 +195,6 @@ func (kq *KQueue) worker(cancelFD uintptr) {
 	}()
 
 	for {
-		select {
-		case <-kq.allDone:
-			return
-		default:
-		}
 
 		var events [1]unix.Kevent_t
 	RETRY:

@@ -1,7 +1,6 @@
 package blockuntilclosed
 
 import (
-	"runtime"
 	"sync"
 	"syscall"
 )
@@ -24,7 +23,7 @@ func (cm *closeMap) Close(key uintptr) bool {
 		close(payload.c)
 		return true
 	}
-	return false // May have already been closed
+	return false // May have already been closed. But how?
 }
 
 func (cm *closeMap) Add(key uintptr, sconn syscall.RawConn) (loaded bool, _ *closeMapPayload) {
@@ -42,4 +41,15 @@ func (cm *closeMap) Add(key uintptr, sconn syscall.RawConn) (loaded bool, _ *clo
 	}
 
 	return false, nil // This is an error
+}
+
+func (cm *closeMap) Drain() (count int) {
+	cm.m.Range(func(key, value interface{}) bool {
+		closed := cm.Close(key.(uintptr))
+		if closed {
+			count++
+		}
+		return true // continue
+	})
+	return count
 }

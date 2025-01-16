@@ -12,7 +12,7 @@ var _ syscall.Conn = (*net.TCPConn)(nil)
 
 type Conn interface {
 	syscall.Conn
-	// net.Conn // TODO: this is constrained on mac because we don't know how to do this for os.File.
+	// net.Conn // TODO: this is should be constrained on mac because we don't know how to do this for os.File.
 }
 
 // Done blocks until a file descriptor is closed.

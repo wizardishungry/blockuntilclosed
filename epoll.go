@@ -21,14 +21,20 @@ func init() {
 // Do not initialize this struct directly, use NewEpoll instead.
 // TODO read notes here https://stackoverflow.com/questions/70905227/epoll-does-not-signal-an-event-when-socket-is-close
 type Epoll struct {
-	logger  *log.Logger
-	m       closeMap
-	epollFD int
-	allDone chan struct{}
+	logger              *log.Logger
+	m                   closeMap
+	epollFD             int
+	allDone             chan struct{}
+	pipeRead, pipeWrite *os.File
 }
 
 func NewEpoll() *Epoll {
 	logger := log.New(os.Stderr, "Epoll: ", log.LstdFlags)
+
+	pipeRead, pipeWrite, err := os.Pipe()
+	if err != nil {
+		logger.Fatalf("os.Pipe(): %v", err)
+	}
 
 RETRY:
 	epollFD, err := unix.EpollCreate1(0)
@@ -41,13 +47,22 @@ RETRY:
 	}
 
 	ep := &Epoll{
-		m:       closeMap{},
-		logger:  logger,
-		epollFD: epollFD,
-		allDone: make(chan struct{}),
+		m:         closeMap{},
+		logger:    logger,
+		epollFD:   epollFD,
+		pipeRead:  pipeRead,
+		pipeWrite: pipeWrite,
+		allDone:   make(chan struct{}),
 	}
 
-	go ep.worker()
+	pipeFD := int(pipeRead.Fd())
+	err = ep.registerPipe(pipeFD)
+	if err != nil {
+		logger.Fatalf("registerPipe(): %v", err)
+		return nil
+	}
+
+	go ep.worker(pipeFD)
 
 	return ep
 }
@@ -57,10 +72,31 @@ func (ep *Epoll) SetLogger(logger *log.Logger) {
 }
 
 func (ep *Epoll) Close() error {
+	err := errors.Join(
+		ep.pipeRead.Close(),
+		ep.pipeWrite.Close(),
+	)
+	<-ep.allDone
+	count := ep.m.Drain()
+	ep.logger.Printf("Drain(): %d", count)
+	return err
+}
+
+func (ep *Epoll) registerPipe(cancelFD int) error {
+RETRY:
+	if err := unix.EpollCtl(ep.epollFD, unix.EPOLL_CTL_ADD, cancelFD, &unix.EpollEvent{
+		Events: unix.EPOLLIN | unix.EPOLLRDHUP | unix.EPOLLONESHOT,
+		Fd:     int32(cancelFD),
+	}); errors.Is(err, unix.EINTR) {
+		ep.logger.Print("registerPipe unix.EpollCtl EINTR")
+		goto RETRY
+	} else if err != nil {
+		return err
+	}
 	return nil
 }
 
-func (ep *Epoll) worker() {
+func (ep *Epoll) worker(cancelFD int) {
 	defer unix.Close(ep.epollFD)
 	defer close(ep.allDone)
 	var events [1]unix.EpollEvent
@@ -81,6 +117,12 @@ func (ep *Epoll) worker() {
 		}
 		ep.logger.Printf("unix.EpollWait(): %+v", events[0])
 		fd := uintptr(events[0].Fd)
+
+		if fd == uintptr(cancelFD) {
+			ep.logger.Print("cancelFD triggered")
+			return
+		}
+
 		closed := ep.m.Close(fd)
 		ep.logger.Printf("Close(): %v", closed)
 	}
