@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log"
+	"os"
 	"sync"
 )
 
@@ -30,11 +31,15 @@ func WithBackend(b Backend) Frontend {
 
 type frontend struct {
 	backend Backend
+	logger  *log.Logger
 }
 
 func newFrontend(b Backend) *frontend {
+	logger := log.New(os.Stderr, "blockuntilclosed: ", log.LstdFlags)
+
 	return &frontend{
 		backend: b,
+		logger:  logger,
 	}
 }
 
@@ -42,7 +47,7 @@ func (fe *frontend) Done(conn Conn) <-chan struct{} {
 	sconn, err := conn.SyscallConn()
 
 	if err != nil {
-		log.Printf("conn.SyscallConn(): %v", err)
+		fe.logger.Printf("conn.SyscallConn(): %v", err)
 		return nil
 	}
 	var (
@@ -51,7 +56,7 @@ func (fe *frontend) Done(conn Conn) <-chan struct{} {
 	if err := sconn.Control(func(fd uintptr) {
 		done = fe.backend.Done(fd)
 	}); err != nil {
-		log.Printf("sconn.Control(): %v", err)
+		fe.logger.Printf("sconn.Control(): %v", err)
 	}
 
 	return done

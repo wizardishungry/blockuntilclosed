@@ -115,7 +115,7 @@ func (kq *KQueue) darwin_kqueue(fd, cancelFD uintptr) <-chan struct{} {
 
 		n, err := unix.Kevent(kqfd, eventsIn, eventsOut[:], nil)
 		if err != nil {
-			log.Printf("unix.Kevent(): %v", err)
+			kq.logger.Printf("unix.Kevent(): %v", err)
 			return
 		}
 
