@@ -37,6 +37,8 @@ func (ep *Epoll) Close() error {
 	return nil
 }
 
+// TODO read notes here https://stackoverflow.com/questions/70905227/epoll-does-not-signal-an-event-when-socket-is-close
+
 func (ep *Epoll) Done(fd uintptr) <-chan struct{} {
 	epollFD, err := unix.EpollCreate1(0)
 	if err != nil {
