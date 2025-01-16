@@ -3,8 +3,11 @@
 package blockuntilclosed
 
 import (
+	"errors"
+	"fmt"
 	"log"
 	"os"
+	"sync"
 
 	"golang.org/x/sys/unix"
 )
@@ -17,9 +20,29 @@ func init() {
 
 // KQueue is a Backend that uses kqueue(2) to block until a file descriptor is closed.
 // Do not initialize this struct directly, use NewKQueue instead.
+// Cribbed from
+// https://gist.github.com/juanqui/7564275
+// https://github.com/apple/darwin-xnu/blob/main/bsd/sys/event.h
+// https://github.com/fsnotify/fsnotify/blob/main/backend_kqueue.go
+// For os.File support:
+// FreeBSD, etc. supports  the following filter types:
+// 			   NOTE_CLOSE		A  file	descriptor referencing
+// 						the   monitored	  file,	   was
+// 						closed.	  The  closed file de-
+// 						scriptor did  not  have	 write
+// 						access.
+// 			   NOTE_CLOSE_WRITE	A  file	descriptor referencing
+// 						the   monitored	  file,	   was
+// 						closed.	  The  closed file de-
+// 						scriptor had write access.
+
 type KQueue struct {
 	pipeRead, pipeWrite *os.File
 	logger              *log.Logger
+	kqfd                int
+	closeOnce           func() error
+	allDone             chan struct{}
+	m                   closeMap[uintptr]
 }
 
 func NewKQueue() *KQueue {
@@ -30,117 +53,172 @@ func NewKQueue() *KQueue {
 		logger.Fatalf("os.Pipe(): %v", err)
 	}
 
-	return &KQueue{
+	kq := &KQueue{
 		pipeRead:  pipeRead,
 		pipeWrite: pipeWrite,
 		logger:    logger,
+		allDone:   make(chan struct{}),
+		closeOnce: nil,
+		m:         closeMap[uintptr]{},
 	}
+	kq.closeOnce = sync.OnceValue(kq.close)
+
+	if err := kq.startKQueue(); err != nil {
+		logger.Fatalf("kq.startKQueue(): %v", err)
+	}
+
+	return kq
 }
 
 func (kq *KQueue) SetLogger(logger *log.Logger) {
 	kq.logger = logger
 }
 
+func (kq *KQueue) close() error {
+	close(kq.allDone)
+	return errors.Join(
+		kq.pipeRead.Close(),
+		kq.pipeWrite.Close(),
+	)
+}
+
 func (kq *KQueue) Close() error {
-	kq.pipeRead.Close()
-	kq.pipeWrite.Close()
-	return nil
+	return kq.closeOnce()
 }
 
 func (kq *KQueue) Done(fd uintptr) <-chan struct{} {
-	var cancelFD uintptr
-	if kq.pipeRead != nil {
-		cancelFD = kq.pipeRead.Fd()
+	select {
+	case <-kq.allDone:
+		return nil
+	default:
 	}
-	return kq.darwin_kqueue(fd, cancelFD)
-}
 
-// cribbed from https://gist.github.com/juanqui/7564275
-func (kq *KQueue) darwin_kqueue(fd, cancelFD uintptr) <-chan struct{} {
-	done := make(chan struct{})
-
-	// TODO: this kqueue could be global to avoid creating it every time
-	// I tried this but it was late at night.
-	kqfd, err := unix.Kqueue()
-	if err != nil {
-		kq.logger.Printf("unix.Kqueue(): %v", err)
+	loaded, c := kq.m.Add(fd)
+	if loaded && c == nil {
+		kq.logger.Print("loaded and nil; this is a problem")
 		return nil
 	}
 
-	go func() {
-		defer close(done)
-		defer unix.Close(kqfd)
+	if c == nil {
+		kq.logger.Print("stored and nil; this is a problem")
+		return nil
+	}
 
-		/*
-			FreeBSD  supports  the following filter types:
+	eventsIn := [...]unix.Kevent_t{{
+		Ident:  uint64(fd),
+		Filter: unix.EVFILT_EXCEPT,
+		Flags: unix.EV_ADD |
+			unix.EV_ENABLE |
+			unix.EV_ONESHOT |
+			unix.EV_DISPATCH2 |
+			unix.EV_VANISHED |
+			unix.EV_RECEIPT,
+		Fflags: unix.NOTE_NONE,
+		Data:   0,
+		Udata:  nil,
+	}}
 
-						   NOTE_CLOSE		A  file	descriptor referencing
-									the   monitored	  file,	   was
-									closed.	  The  closed file de-
-									scriptor did  not  have	 write
-									access.
+	var eventsOut [1]unix.Kevent_t
 
-						   NOTE_CLOSE_WRITE	A  file	descriptor referencing
-									the   monitored	  file,	   was
-									closed.	  The  closed file de-
-									scriptor had write access.
+RETRY:
+	_, err := unix.Kevent(kq.kqfd, eventsIn[:], eventsOut[:], nil)
+	if errors.Is(err, unix.EINTR) {
+		kq.logger.Print("Done unix.Kevent EINTR")
+		goto RETRY
+	} else if err != nil {
+		kq.logger.Printf("Done unix.Kevent(): %v", err)
+		return nil
+	}
 
-		*/
+	return c
+}
 
-		// https://github.com/apple/darwin-xnu/blob/main/bsd/sys/event.h
-		// https://github.com/fsnotify/fsnotify/blob/main/backend_kqueue.go
+func (kq *KQueue) startKQueue() error {
+RETRY_Kqueue:
+	kqfd, err := unix.Kqueue()
+	if errors.Is(err, unix.EINTR) {
+		kq.logger.Print("startKQueue unix.Kqueue EINTR")
+		goto RETRY_Kqueue
+	} else if err != nil {
+		return fmt.Errorf("unix.Kqueue(): %w", err)
+	}
 
-		// This only works for sockets (and fifos?). It doesn't work for files.
-		ev1 := unix.Kevent_t{
-			Ident:  uint64(fd),
-			Filter: unix.EVFILT_EXCEPT,
-			Flags:  unix.EV_ADD | unix.EV_ENABLE | unix.EV_ONESHOT | unix.EV_DISPATCH2 | unix.EV_VANISHED,
-			Fflags: unix.NOTE_NONE,
-			Data:   0,
-			Udata:  nil,
-		}
+	kq.kqfd = kqfd
+	cancelFD := kq.pipeRead.Fd()
 
-		eventsIn := make([]unix.Kevent_t, 0, 2)
-		eventsIn = append(eventsIn, ev1)
+	eventsIn := [...]unix.Kevent_t{{
+		Ident:  uint64(cancelFD),
+		Filter: unix.EVFILT_READ,
+		Flags: unix.EV_ADD | // add the event
+			unix.EV_ENABLE | // enable the event
+			unix.EV_ONESHOT | // deliver this event only once
+			unix.EV_DISPATCH2 | // prereq for EV_VANISHED
+			unix.EV_VANISHED | // I believe necessary if the pipe is closed
+			unix.EV_RECEIPT, // do not receive only add
+		Fflags: unix.NOTE_NONE,
+		Data:   0,
+		Udata:  nil,
+	}}
 
-		if cancelFD > 0 {
-			ev2 := unix.Kevent_t{
-				Ident:  uint64(cancelFD),
-				Filter: unix.EVFILT_READ,
-				Flags:  unix.EV_ADD | unix.EV_ENABLE | unix.EV_ONESHOT | unix.EV_DISPATCH2 | unix.EV_VANISHED,
-				Fflags: unix.NOTE_NONE,
-				Data:   0,
-				Udata:  nil,
-			}
-			eventsIn = append(eventsIn, ev2)
-		}
+	var eventsOut [1]unix.Kevent_t
 
-		var eventsOut [1]unix.Kevent_t
+RETRY_Kevent:
+	_, err = unix.Kevent(kqfd, eventsIn[:], eventsOut[:], nil)
+	if errors.Is(err, unix.EINTR) {
+		kq.logger.Print("startup unix.Kevent EINTR")
+		goto RETRY_Kevent
+	} else if err != nil {
+		return fmt.Errorf("startup unix.Kevent(): %w", err)
+	}
 
-		n, err := unix.Kevent(kqfd, eventsIn, eventsOut[:], nil)
+	go kq.worker(cancelFD)
+
+	return nil
+}
+
+func (kq *KQueue) worker(cancelFD uintptr) {
+	defer func() {
+		err := unix.Close(kq.kqfd)
 		if err != nil {
-			kq.logger.Printf("unix.Kevent(): %v", err)
-			return
-		}
-
-		kq.logger.Print("kqueue events received", n)
-		gotEvent := eventsOut[0]
-
-		fromSocket := uintptr(gotEvent.Ident) == fd
-
-		// vanishedFlag := gotEvent.Flags&unix.EV_VANISHED != 0 // TODO do we need this?
-		errorFlag := gotEvent.Flags&unix.EV_ERROR != 0
-		eofFlag := gotEvent.Flags&unix.EV_EOF != 0
-
-		kq.logger.Printf("gotEvent: %+v fromSocket=%+v\n", gotEvent, fromSocket)
-
-		if eofFlag {
-			kq.logger.Print("got eof")
-		}
-		if errorFlag {
-			kq.logger.Printf("gotEvent.Flags&unix.EV_ERROR != 0: %v\n", unix.Errno(gotEvent.Data))
+			kq.logger.Printf("worker unix.Close(): %v", err)
 		}
 	}()
 
-	return done
+	for {
+		select {
+		case <-kq.allDone:
+			return
+		default:
+		}
+
+		var events [1]unix.Kevent_t
+	RETRY:
+		n, err := unix.Kevent(kq.kqfd, nil, events[:], nil)
+		if errors.Is(err, unix.EINTR) {
+			kq.logger.Print("pool kqueue EINTR")
+			goto RETRY
+		} else if err != nil {
+			kq.logger.Printf("poll unix.Kevent(): %v", err)
+			return
+		}
+
+		kq.logger.Print("kqueue events received ", n)
+
+		ev := &events[0]
+
+		if ev.Ident == uint64(cancelFD) {
+			kq.logger.Print("cancelFD event")
+			return
+		}
+
+		errorFlag := ev.Flags&unix.EV_ERROR != 0
+		eofFlag := ev.Flags&unix.EV_EOF != 0
+		kq.logger.Printf("event: %+v errorFlag=%v eofFlag=%v \n", ev, errorFlag, eofFlag)
+
+		if eofFlag {
+			closed := kq.m.Close(uintptr(ev.Ident))
+			kq.logger.Print("got eof success=", closed)
+		}
+
+	}
 }

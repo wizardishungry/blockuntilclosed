@@ -114,7 +114,8 @@ func BenchmarkTCP(b *testing.B) {
 
 		// Run the benchmark
 		b.ResetTimer()
-		for i := 0; i < b.N; i++ {
+
+		for b.Loop() {
 			conn, err := net.Dial("tcp", ln.Addr().String())
 			if err != nil {
 				b.Fatalf("failed to connect to TCP server: %v", err)
