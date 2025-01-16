@@ -224,10 +224,7 @@ func (kq *KQueue) worker(cancelFD uintptr) {
 		eofFlag := ev.Flags&unix.EV_EOF != 0
 		kq.logger.Printf("event: %+v errorFlag=%v eofFlag=%v \n", ev, errorFlag, eofFlag)
 
-		if eofFlag {
-			closed := kq.m.Close(uintptr(ev.Ident))
-			kq.logger.Print("got eof success=", closed)
-		}
-
+		closed := kq.m.Close(uintptr(ev.Ident))
+		kq.logger.Print("Close success=", closed)
 	}
 }
