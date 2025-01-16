@@ -43,20 +43,15 @@ func TestUnix(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		if isClosed, err := IsClosed(conn); err != nil {
-			t.Fatal(err)
-		} else if isClosed {
-			t.Fatal("expected conn to be open")
-		}
-
-		if err := Block(ctx, conn); err != nil {
+		done, err := Done(conn)
+		if err != nil {
 			t.Fatal(err)
 		}
-
-		if isClosed, err := IsClosed(conn); err != nil {
-			t.Fatal(err)
-		} else if isClosed {
-			t.Fatal("expected conn to be closed")
+		select {
+		case <-done:
+			t.Log("got eof")
+		case <-ctx.Done():
+			t.Fatal("expected context to not be done")
 		}
 
 	}()
@@ -66,12 +61,6 @@ func TestUnix(t *testing.T) {
 		conn, err := net.DialUnix("unix", nil, l.Addr().(*net.UnixAddr))
 		if err != nil {
 			t.Fatal(err)
-		}
-
-		if isClosed, err := IsClosed(conn); err != nil {
-			t.Fatal(err)
-		} else if isClosed {
-			t.Fatal("expected conn to be open")
 		}
 
 		defer conn.Close()

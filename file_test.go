@@ -1,7 +1,6 @@
 package blockuntilclosed
 
 import (
-	"context"
 	"os"
 	"sync"
 	"testing"
@@ -10,8 +9,6 @@ import (
 
 func TestFile(t *testing.T) {
 	t.Skip("skipping test that doesn't work on darwin")
-
-	ctx := context.Background()
 
 	const waitTime = 100 * time.Millisecond
 
@@ -37,9 +34,11 @@ func TestFile(t *testing.T) {
 
 	go func() {
 		defer wg.Done()
-		if err := Block(ctx, f); err != nil {
+		done, err := Done(f)
+		if err != nil {
 			t.Fatal(err)
 		}
+		<-done
 		t.Log("got eof")
 	}()
 

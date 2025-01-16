@@ -15,14 +15,9 @@ type Conn interface {
 	// net.Conn // TODO: this is constrained on mac because we don't know how to do this for os.File.
 }
 
-// IsClosed checks if a file descriptor is closed in a non-blocking manner.
-func IsClosed(conn Conn) (bool, error) {
-	return WithBackend(DefaultBackend()).IsClosed(conn)
-}
-
-// Block blocks until a file descriptor is closed.
-func Block(ctx context.Context, conn Conn) error {
-	return WithBackend(DefaultBackend()).Block(ctx, conn)
+// Done blocks until a file descriptor is closed.
+func Done(conn Conn) (<-chan struct{}, error) {
+	return WithBackend(DefaultBackend()).Done(conn)
 }
 
 // WithContext returns a wrapped Context that is canceled when the file descriptor is closed.

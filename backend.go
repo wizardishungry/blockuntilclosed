@@ -1,13 +1,11 @@
 package blockuntilclosed
 
 import (
-	"context"
 	"sync"
 )
 
 type Backend interface {
-	Block(ctx context.Context, fd uintptr) error
-	IsClosed(fd uintptr) (bool, error)
+	Done(fd uintptr) (<-chan struct{}, error)
 }
 
 var (

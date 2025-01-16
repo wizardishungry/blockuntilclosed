@@ -36,20 +36,15 @@ func TestAbort(t *testing.T) {
 		}
 		defer conn.Close()
 
-		if isClosed, err := IsClosed(conn); err != nil {
-			t.Fatal(err)
-		} else if isClosed {
-			t.Fatal("expected conn to be open")
+		done, err := Done(conn)
+		if err != nil {
+			t.Fatal("expected error")
 		}
-
-		if err := Block(ctx, conn); err == nil {
-			t.Fatal("expected an error from context cancel")
-		}
-
-		if isClosed, err := IsClosed(conn); err != nil {
-			t.Fatal(err)
-		} else if isClosed {
-			t.Fatal("expected conn to be open")
+		select {
+		case <-done:
+			t.Fatal("expected to not receive done")
+		case <-ctx.Done():
+			t.Log("aborted")
 		}
 
 	}()
@@ -61,12 +56,7 @@ func TestAbort(t *testing.T) {
 			t.Fatal(err)
 		}
 		time.Sleep(waitTime)
-
-		if isClosed, err := IsClosed(conn); err != nil {
-			t.Fatal(err)
-		} else if isClosed {
-			t.Fatal("expected conn to be open")
-		}
+		_ = conn
 
 		cancel()
 	}()
