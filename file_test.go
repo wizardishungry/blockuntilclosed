@@ -10,8 +10,6 @@ import (
 func TestFile(t *testing.T) {
 	t.Skip("skipping test that doesn't work on darwin")
 
-	const waitTime = 100 * time.Millisecond
-
 	f, err := os.CreateTemp("", "test")
 	if err != nil {
 		t.Fatal(err)
