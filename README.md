@@ -1,5 +1,3 @@
-# What is this?
-
 When working on a [fasthttp](https://github.com/valyala/fasthttp) project, I discovered
 [there isn't a mechanism](https://github.com/valyala/fasthttp/issues/965) to receive notification (via
 `context.Context`) of request aborts.
@@ -20,7 +18,7 @@ disconnect notification.
 This may be generalized to `os.File` on some platforms (see notes in code), but for now it is only known
 to "work" on Mac and Linux for TCP & Unix sockets.
 
-## My Reading list
+## Reading list
 
 - https://github.com/golang/go/issues/15735
 - https://github.com/tidwall/evio/blob/master/internal/internal_linux.go epoll example
