@@ -30,7 +30,6 @@ func TestUnix(t *testing.T) {
 	}
 	defer l.Close()
 
-	const waitTime = 100 * time.Millisecond
 	start := time.Now()
 
 	var wg sync.WaitGroup
