@@ -5,6 +5,8 @@ import (
 	"log"
 	"os"
 	"sync"
+
+	"golang.org/x/sys/unix"
 )
 
 // Frontend is the interface for the end user to interact with the package.
@@ -55,8 +57,16 @@ func (fe *frontend) Done(conn Conn) <-chan struct{} {
 	var (
 		done <-chan struct{}
 	)
+
 	if err := sconn.Control(func(fd uintptr) {
-		done = fe.backend.Done(sconn, fd)
+		newFD, err := unix.Dup(int(fd))
+		if err != nil {
+			fe.logger.Printf("unix.Dup(): %v", err)
+			return
+		}
+		// fe.logger.Printf("newFD: %d->%d", fd, newFD)
+
+		done = fe.backend.Done(newFD)
 	}); err != nil {
 		fe.logger.Printf("sconn.Control(): %v", err)
 	}

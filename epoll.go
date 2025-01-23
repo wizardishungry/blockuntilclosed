@@ -7,7 +7,6 @@ import (
 	"log"
 	"os"
 	"sync"
-	"syscall"
 
 	"golang.org/x/sys/unix"
 )
@@ -136,9 +135,9 @@ func (ep *Epoll) worker(cancelFD int) {
 		}
 		ev := &events[0]
 		ep.logger.Printf("unix.EpollWait(): got event %+v", ev)
-		fd := uintptr(ev.Fd)
+		fd := int(ev.Fd)
 
-		if fd == uintptr(cancelFD) {
+		if fd == cancelFD {
 			ep.logger.Print("cancelFD triggered")
 			return
 		}
@@ -148,14 +147,14 @@ func (ep *Epoll) worker(cancelFD int) {
 	}
 }
 
-func (ep *Epoll) Done(sconn syscall.RawConn, fd uintptr) <-chan struct{} {
+func (ep *Epoll) Done(fd int) <-chan struct{} {
 	select {
 	case <-ep.allDone:
 		return nil
 	default:
 	}
 
-	loaded, payload := ep.m.Add(fd, sconn)
+	loaded, payload := ep.m.Add(fd)
 	if payload == nil {
 		ep.logger.Print("nil payload; this is a problem")
 		return nil

@@ -8,7 +8,6 @@ import (
 	"log"
 	"os"
 	"sync"
-	"syscall"
 
 	"golang.org/x/sys/unix"
 )
@@ -96,14 +95,14 @@ func (kq *KQueue) Close() error {
 	return kq.closeOnce()
 }
 
-func (kq *KQueue) Done(sconn syscall.RawConn, fd uintptr) <-chan struct{} {
+func (kq *KQueue) Done(fd int) <-chan struct{} {
 	select {
 	case <-kq.allDone:
 		return nil
 	default:
 	}
 
-	loaded, payload := kq.m.Add(fd, sconn)
+	loaded, payload := kq.m.Add(fd)
 	if payload == nil {
 		kq.logger.Print("nil payload; this is a problem")
 		return nil
@@ -267,7 +266,7 @@ func (kq *KQueue) worker(cancelFD uintptr) {
 			continue
 		}
 
-		closed := kq.m.Close(uintptr(ev.Ident))
+		closed := kq.m.Close(int(ev.Ident))
 		kq.logger.Print("Close success=", closed)
 	}
 }

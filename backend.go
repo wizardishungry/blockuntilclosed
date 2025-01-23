@@ -3,12 +3,11 @@ package blockuntilclosed
 import (
 	"log"
 	"sync"
-	"syscall"
 )
 
 // Backend is the interface for the platform-specific implementation of the package.
 type Backend interface {
-	Done(sconn syscall.RawConn, fd uintptr) <-chan struct{}
+	Done(fd int) <-chan struct{}
 	SetLogger(logger *log.Logger)
 	Close() error
 }

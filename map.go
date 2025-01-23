@@ -1,36 +1,42 @@
 package blockuntilclosed
 
 import (
+	"log"
 	"sync"
-	"syscall"
+
+	"golang.org/x/sys/unix"
 )
 
 type closeMap struct {
-	m sync.Map // map[uintptr] *closeMapPayload
+	m sync.Map // map[int] *closeMapPayload
 }
 
 type closeMapPayload struct {
-	sconn syscall.RawConn // keep a reference to the syscall.RawConn so the finalizer doesn't run before the callback; fingers crossed.
-	c     chan struct{}
+	c chan struct{}
 }
 
-func (cm *closeMap) Close(key uintptr) bool {
+func (cm *closeMap) Close(key int) bool {
 	v, loaded := cm.m.LoadAndDelete(key)
 	if !loaded {
 		return false
 	}
 	if payload, ok := v.(*closeMapPayload); ok {
 		close(payload.c)
+
+		err := unix.Close(key) // Close the dup'd file descriptor
+		if err != nil {
+			log.Printf("unix.Close(%d): %v", key, err) // TODO: inject logger
+		}
+
 		return true
 	}
 	return false // May have already been closed. But how?
 }
 
-func (cm *closeMap) Add(key uintptr, sconn syscall.RawConn) (loaded bool, _ *closeMapPayload) {
+func (cm *closeMap) Add(key int) (loaded bool, _ *closeMapPayload) {
 	c := make(chan struct{})
 	payload := &closeMapPayload{
-		sconn: sconn,
-		c:     c,
+		c: c,
 	}
 	v, loaded := cm.m.LoadOrStore(key, payload)
 	if !loaded {
@@ -45,7 +51,7 @@ func (cm *closeMap) Add(key uintptr, sconn syscall.RawConn) (loaded bool, _ *clo
 
 func (cm *closeMap) Drain() (count int) {
 	cm.m.Range(func(key, value interface{}) bool {
-		closed := cm.Close(key.(uintptr))
+		closed := cm.Close(key.(int))
 		if closed {
 			count++
 		}
