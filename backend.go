@@ -10,7 +10,7 @@ import (
 type Backend interface {
 	Done(sconn syscall.RawConn, fd uintptr) <-chan struct{}
 	SetLogger(logger *log.Logger)
-	getMap() *closeMap
+	Close() error
 }
 
 var (

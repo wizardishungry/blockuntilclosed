@@ -21,12 +21,13 @@ func init() {
 
 // KQueue is a Backend that uses kqueue(2) to block until a file descriptor is closed.
 // Do not initialize this struct directly, use NewKQueue instead.
+//
 // Cribbed from
-// https://gist.github.com/juanqui/7564275
-// https://github.com/apple/darwin-xnu/blob/main/bsd/sys/event.h
-// https://github.com/fsnotify/fsnotify/blob/main/backend_kqueue.go
-// For os.File support:
-// FreeBSD, etc. supports  the following filter types:
+//   - https://gist.github.com/juanqui/7564275
+//   - https://github.com/apple/darwin-xnu/blob/main/bsd/sys/event.h
+//   - https://github.com/fsnotify/fsnotify/blob/main/backend_kqueue.go
+//
+// For os.File support, FreeBSD, etc. supports  the following filter types:
 //
 //	   NOTE_CLOSE		A  file	descriptor referencing
 //				the   monitored	  file,	   was

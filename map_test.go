@@ -7,13 +7,19 @@ import (
 )
 
 func TestMapDeduped(t *testing.T) {
+
 	be := NewDefaultBackend()
 	fe := WithBackend(be)
 
-	m := be.getMap()
-	if m == nil {
+	type getMap interface {
+		getMap() *closeMap
+	}
+	beWithMap, ok := be.(getMap)
+
+	if !ok {
 		t.Skip("backend doesn't use map")
 	}
+	m := beWithMap.getMap()
 
 	l, err := net.ListenTCP("tcp", &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 0})
 	if err != nil {
@@ -21,29 +27,38 @@ func TestMapDeduped(t *testing.T) {
 	}
 	defer l.Close()
 
+	goAhead := make(chan struct{})
+
 	go func() {
+		defer func() {
+			goAhead <- struct{}{}
+			t.Log("client sent go ahead")
+		}()
 		sock, err := net.DialTCP("tcp", nil, l.Addr().(*net.TCPAddr))
 		if err != nil {
 			t.Fatal(err)
 		}
-		time.Sleep(waitTime) // events take a sec to propagate
-		sock.Close()
-		sock.CloseRead()
-		sock.CloseWrite()
 		defer sock.Close()
+		t.Log("client waiting for go ahead")
+		<-goAhead
+		t.Log("client closing dialed connection")
+		sock.Close()
 	}()
 
 	sock, err := l.AcceptTCP()
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer sock.Close()
+
+	t.Log("accepted", sock.RemoteAddr())
 
 	c := fe.Done(sock)
 	if c == nil {
 		t.Fatal("expected channel")
 	}
-	cNew := fe.Done(sock)
-	if c != cNew {
+
+	if cNew := fe.Done(sock); c != cNew {
 		t.Fatal("expected same channel")
 	}
 
@@ -61,11 +76,11 @@ func TestMapDeduped(t *testing.T) {
 		t.Fatal("unexpected close")
 	default:
 	}
-	sock.Close()
-	sock.CloseRead()
-	sock.CloseWrite()
 
-	time.Sleep(waitTime) // events take a sec to propagate
+	goAhead <- struct{}{}
+	t.Log("server waiting for go ahead")
+	<-goAhead
+	time.Sleep(10 * time.Millisecond) // give the client a chance to close the connection
 
 	select {
 	case <-c:
@@ -80,5 +95,10 @@ func TestMapDeduped(t *testing.T) {
 	})
 	if count != 0 {
 		t.Fatalf("expected no entries, got %d", count)
+	}
+
+	t.Log("closing backend")
+	if err := be.Close(); err != nil {
+		t.Fatal(err)
 	}
 }

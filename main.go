@@ -11,6 +11,7 @@ import (
 var _ syscall.Conn = (*os.File)(nil)
 var _ syscall.Conn = (*net.TCPConn)(nil)
 
+// package scope errors may extracted from canceled contexts using [context.Cause].
 var (
 	ErrConnClosed = errors.New("conn closed")
 )

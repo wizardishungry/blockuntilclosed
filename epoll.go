@@ -79,26 +79,27 @@ func (ep *Epoll) getMap() *closeMap {
 }
 
 func (ep *Epoll) Close() error {
+	ep.logger.Print("Close()")
 	return ep.closeOnce()
 }
 
 func (ep *Epoll) close() error {
-	err := errors.Join(
-		ep.pipeRead.Close(),
-		ep.pipeWrite.Close(),
-	)
+	ep.pipeWrite.Write([]byte{0})
+	ep.logger.Print("awaiting allDone")
 	<-ep.allDone
 	count := ep.m.Drain()
 	ep.logger.Printf("Drain(): %d", count)
-	return err
+	return nil
 }
 
 func (ep *Epoll) registerPipe(cancelFD int) error {
 RETRY:
 	if err := unix.EpollCtl(ep.epollFD, unix.EPOLL_CTL_ADD, cancelFD, &unix.EpollEvent{
 		Events: unix.EPOLLIN |
+			unix.EPOLLOUT |
 			unix.EPOLLRDHUP |
-			unix.EPOLLONESHOT,
+			unix.EPOLLERR,
+		// unix.EPOLLONESHOT,
 		Fd: int32(cancelFD),
 	}); errors.Is(err, unix.EINTR) {
 		ep.logger.Print("registerPipe unix.EpollCtl EINTR")
@@ -110,11 +111,13 @@ RETRY:
 }
 
 func (ep *Epoll) worker(cancelFD int) {
+	defer ep.pipeRead.Close()
+	defer ep.pipeWrite.Close()
 	defer unix.Close(ep.epollFD)
 	defer close(ep.allDone)
 	var events [1]unix.EpollEvent
 
-	ep.logger.Print("worker started")
+	ep.logger.Printf("worker started on %d with cancelFD %d", ep.epollFD, cancelFD)
 
 	for {
 	RETRY:
@@ -132,7 +135,7 @@ func (ep *Epoll) worker(cancelFD int) {
 			return
 		}
 		ev := &events[0]
-		ep.logger.Printf("unix.EpollWait(): %+v", ev)
+		ep.logger.Printf("unix.EpollWait(): got event %+v", ev)
 		fd := uintptr(ev.Fd)
 
 		if fd == uintptr(cancelFD) {
@@ -141,7 +144,7 @@ func (ep *Epoll) worker(cancelFD int) {
 		}
 
 		closed := ep.m.Close(fd)
-		ep.logger.Printf("Close(): %v", closed)
+		ep.logger.Printf("Close(%d): %v", fd, closed)
 	}
 }
 
