@@ -7,14 +7,10 @@ import (
 )
 
 func TestMapDeduped(t *testing.T) {
-	oldBackend := DefaultBackend()
-	t.Cleanup(func() {
-		defaultBackend = oldBackend
-	})
+	be := NewDefaultBackend()
+	fe := WithBackend(be)
 
-	defaultBackend = NewDefaultBackend()
-
-	m := defaultBackend.getMap()
+	m := be.getMap()
 	if m == nil {
 		t.Skip("backend doesn't use map")
 	}
@@ -26,7 +22,15 @@ func TestMapDeduped(t *testing.T) {
 	defer l.Close()
 
 	go func() {
-		net.Dial("tcp", l.Addr().String())
+		sock, err := net.DialTCP("tcp", nil, l.Addr().(*net.TCPAddr))
+		if err != nil {
+			t.Fatal(err)
+		}
+		time.Sleep(waitTime) // events take a sec to propagate
+		sock.Close()
+		sock.CloseRead()
+		sock.CloseWrite()
+		defer sock.Close()
 	}()
 
 	sock, err := l.AcceptTCP()
@@ -34,11 +38,11 @@ func TestMapDeduped(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	c := Done(sock)
+	c := fe.Done(sock)
 	if c == nil {
 		t.Fatal("expected channel")
 	}
-	cNew := Done(sock)
+	cNew := fe.Done(sock)
 	if c != cNew {
 		t.Fatal("expected same channel")
 	}
@@ -58,6 +62,8 @@ func TestMapDeduped(t *testing.T) {
 	default:
 	}
 	sock.Close()
+	sock.CloseRead()
+	sock.CloseWrite()
 
 	time.Sleep(waitTime) // events take a sec to propagate
 
@@ -65,5 +71,14 @@ func TestMapDeduped(t *testing.T) {
 	case <-c:
 	default:
 		t.Fatal("expected close")
+	}
+
+	count = 0
+	m.m.Range(func(key, value any) bool {
+		count++
+		return true
+	})
+	if count != 0 {
+		t.Fatalf("expected no entries, got %d", count)
 	}
 }

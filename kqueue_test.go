@@ -19,6 +19,7 @@ func TestKqueueClose(t *testing.T) {
 
 func TestKqueueDoStuffAndClose(t *testing.T) {
 	kq := NewKQueue()
+	fe := WithBackend(kq)
 
 	l, err := net.ListenTCP("tcp", &net.TCPAddr{
 		IP:   net.IPv4(127, 0, 0, 1),
@@ -39,7 +40,7 @@ func TestKqueueDoStuffAndClose(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		<-Done(conn)
+		<-fe.Done(conn)
 		t.Log("got eof")
 
 	}()

@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"math"
 	"os"
 	"sync"
 	"syscall"
@@ -28,16 +27,16 @@ func init() {
 // https://github.com/fsnotify/fsnotify/blob/main/backend_kqueue.go
 // For os.File support:
 // FreeBSD, etc. supports  the following filter types:
-// 			   NOTE_CLOSE		A  file	descriptor referencing
-// 						the   monitored	  file,	   was
-// 						closed.	  The  closed file de-
-// 						scriptor did  not  have	 write
-// 						access.
-// 			   NOTE_CLOSE_WRITE	A  file	descriptor referencing
-// 						the   monitored	  file,	   was
-// 						closed.	  The  closed file de-
-// 						scriptor had write access.
-
+//
+//	   NOTE_CLOSE		A  file	descriptor referencing
+//				the   monitored	  file,	   was
+//				closed.	  The  closed file de-
+//				scriptor did  not  have	 write
+//				access.
+//	   NOTE_CLOSE_WRITE	A  file	descriptor referencing
+//				the   monitored	  file,	   was
+//				closed.	  The  closed file de-
+//				scriptor had write access.
 type KQueue struct {
 	pipeRead, pipeWrite *os.File
 	logger              *log.Logger
@@ -47,6 +46,7 @@ type KQueue struct {
 	m                   closeMap
 }
 
+// NewKQueue returns a new KQueue instance.
 func NewKQueue() *KQueue {
 	logger := log.New(os.Stderr, "KQueue: ", log.LstdFlags)
 
@@ -115,6 +115,7 @@ func (kq *KQueue) Done(sconn syscall.RawConn, fd uintptr) <-chan struct{} {
 
 	if loaded {
 		// Already added
+		kq.logger.Print("Already added")
 		return payload.c
 	}
 
@@ -125,25 +126,12 @@ func (kq *KQueue) Done(sconn syscall.RawConn, fd uintptr) <-chan struct{} {
 			Flags: unix.EV_ADD |
 				unix.EV_ENABLE |
 				unix.EV_ONESHOT |
-				// unix.EV_DISPATCH2 |
+				unix.EV_DISPATCH2 |
 				// unix.EV_DISPATCH |
-				// unix.EV_VANISHED |
+				unix.EV_VANISHED |
 				unix.EV_RECEIPT,
 			Fflags: unix.NOTE_NONE,
 			Data:   0,
-			Udata:  nil,
-		},
-		{ // EVFILT_READ is used to detect when the recv buffer is at EOF.
-			Ident:  uint64(fd),
-			Filter: unix.EVFILT_READ,
-			Flags: unix.EV_ADD |
-				unix.EV_ENABLE |
-				unix.EV_ONESHOT |
-				// unix.EV_DISPATCH2 |
-				// unix.EV_VANISHED |
-				unix.EV_RECEIPT,
-			Fflags: unix.NOTE_LOWAT | unix.NOTE_NONE,
-			Data:   math.MaxInt64,
 			Udata:  nil,
 		},
 	}
@@ -159,6 +147,8 @@ RETRY:
 		kq.logger.Printf("Done unix.Kevent(): %v", err)
 		return nil
 	}
+
+	kq.logger.Print("Done success")
 
 	return payload.c
 }
@@ -217,7 +207,6 @@ func (kq *KQueue) worker(cancelFD uintptr) {
 
 	var (
 		eventsOut [1]unix.Kevent_t
-		// eventsIn  []unix.Kevent_t = make([]unix.Kevent_t, 0, 1)
 	)
 	for {
 	RETRY:
@@ -229,7 +218,6 @@ func (kq *KQueue) worker(cancelFD uintptr) {
 			kq.logger.Printf("poll unix.Kevent(): %v", err)
 			return
 		}
-		// eventsIn = eventsIn[:0] // reset slice
 
 		kq.logger.Print("kqueue events received ", n)
 
@@ -270,17 +258,11 @@ func (kq *KQueue) worker(cancelFD uintptr) {
 
 		if errorFlag {
 			kq.logger.Print("errorFlag, not closing")
+			continue
 		}
 
 		if ev.Filter != unix.EVFILT_EXCEPT {
 			kq.logger.Print("not EVFILT_EXCEPT, not closing")
-			continue
-		}
-
-		// sigh, once the file descriptor is closed, we get an event with Data=0
-		// There is not a way to only get the event when the buffer is fully consumed.
-		if !eofFlag || ev.Data > 0 {
-			kq.logger.Print("!eofFlag || ev.Data > 0, not closing")
 			continue
 		}
 

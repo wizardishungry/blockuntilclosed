@@ -96,8 +96,10 @@ func (ep *Epoll) close() error {
 func (ep *Epoll) registerPipe(cancelFD int) error {
 RETRY:
 	if err := unix.EpollCtl(ep.epollFD, unix.EPOLL_CTL_ADD, cancelFD, &unix.EpollEvent{
-		Events: unix.EPOLLIN | unix.EPOLLRDHUP | unix.EPOLLONESHOT,
-		Fd:     int32(cancelFD),
+		Events: unix.EPOLLIN |
+			unix.EPOLLRDHUP |
+			unix.EPOLLONESHOT,
+		Fd: int32(cancelFD),
 	}); errors.Is(err, unix.EINTR) {
 		ep.logger.Print("registerPipe unix.EpollCtl EINTR")
 		goto RETRY
@@ -111,6 +113,9 @@ func (ep *Epoll) worker(cancelFD int) {
 	defer unix.Close(ep.epollFD)
 	defer close(ep.allDone)
 	var events [1]unix.EpollEvent
+
+	ep.logger.Print("worker started")
+
 	for {
 	RETRY:
 		n, err := unix.EpollWait(ep.epollFD, events[:], -1)
@@ -126,8 +131,9 @@ func (ep *Epoll) worker(cancelFD int) {
 			ep.logger.Printf("unix.EpollWait(): no events")
 			return
 		}
-		ep.logger.Printf("unix.EpollWait(): %+v", events[0])
-		fd := uintptr(events[0].Fd)
+		ev := &events[0]
+		ep.logger.Printf("unix.EpollWait(): %+v", ev)
+		fd := uintptr(ev.Fd)
 
 		if fd == uintptr(cancelFD) {
 			ep.logger.Print("cancelFD triggered")
@@ -164,7 +170,7 @@ func (ep *Epoll) Done(sconn syscall.RawConn, fd uintptr) <-chan struct{} {
 
 RETRY:
 	if err := unix.EpollCtl(ep.epollFD, unix.EPOLL_CTL_ADD, int(fd), &unix.EpollEvent{
-		Events: unix.EPOLLIN | unix.EPOLLRDHUP | unix.EPOLLONESHOT,
+		Events: unix.EPOLLIN | unix.EPOLLRDHUP | unix.EPOLLONESHOT | unix.EPOLLERR,
 		Fd:     int32(fd),
 	}); errors.Is(err, unix.EINTR) {
 		ep.logger.Print("Done unix.EpollCtl EINTR")
@@ -173,6 +179,8 @@ RETRY:
 		ep.logger.Printf("unix.EpollCtl(): %v", err)
 		return nil
 	}
+
+	ep.logger.Printf("Done(): added %d", fd)
 
 	return payload.c
 }

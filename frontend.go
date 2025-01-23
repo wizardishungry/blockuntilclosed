@@ -2,31 +2,33 @@ package blockuntilclosed
 
 import (
 	"context"
-	"errors"
 	"log"
 	"os"
 	"sync"
 )
 
+// Frontend is the interface for the end user to interact with the package.
+// The user may also use package scope convenience methods that delegate to the default frontend.
 type Frontend interface {
 	Done(conn Conn) <-chan struct{}
 	WithContext(ctx context.Context, conn Conn) context.Context
+	SetLogger(logger *log.Logger)
 }
 
 var (
-	frontends      = make(map[Backend]Frontend)
-	frontendsMutex sync.Mutex
+	defaultFrontendFunc = sync.OnceValue(func() Frontend {
+		return WithBackend(DefaultBackend())
+	})
 )
 
+// DefaultFrontend retrieves a singleton instance of the default frontend for the current platform.
+func DefaultFrontend() Frontend {
+	return defaultFrontendFunc()
+}
+
+// WithBackend returns a new instance of the frontend with the specified backend.
 func WithBackend(b Backend) Frontend {
-	frontendsMutex.Lock()
-	defer frontendsMutex.Unlock()
-	fe := frontends[b]
-	if fe == nil {
-		fe = newFrontend(b)
-		frontends[b] = fe
-	}
-	return fe
+	return newFrontend(b)
 }
 
 type frontend struct {
@@ -62,8 +64,6 @@ func (fe *frontend) Done(conn Conn) <-chan struct{} {
 	return done
 }
 
-var ErrConnClosed = errors.New("conn closed")
-
 func (fe *frontend) WithContext(ctx context.Context, conn Conn) context.Context {
 	ctx, cancelCause := context.WithCancelCause(ctx)
 	go func() {
@@ -71,11 +71,15 @@ func (fe *frontend) WithContext(ctx context.Context, conn Conn) context.Context 
 		done := fe.Done(conn)
 		select {
 		case <-done:
-			cancelCause(ErrConnClosed) // TODO: we could change Backend.Done to return a specific error for cancelCause
+			cancelCause(ErrConnClosed)
 		case <-ctx.Done():
 			cancelCause(context.Cause(ctx))
 		}
 	}()
 
 	return ctx
+}
+
+func (fe *frontend) SetLogger(logger *log.Logger) {
+	fe.logger = logger
 }

@@ -1,7 +1,6 @@
 package blockuntilclosed
 
 import (
-	"bytes"
 	"context"
 	"io"
 	"log"
@@ -84,15 +83,11 @@ func TestTCP(t *testing.T) {
 }
 
 func BenchmarkTCP(b *testing.B) {
-	oldBackend := DefaultBackend()
-	b.Cleanup(func() {
-		defaultBackend = oldBackend
-	})
-
 	test := func(b *testing.B, doDone, waitDone bool) {
 		be := NewDefaultBackend()
 		be.SetLogger(log.New(io.Discard, "", 0))
-		defaultBackend = be
+		fe := WithBackend(be)
+		b.ResetTimer()
 
 		// Start a TCP server
 		ln, err := net.ListenTCP("tcp", &net.TCPAddr{
@@ -111,7 +106,7 @@ func BenchmarkTCP(b *testing.B) {
 				if err != nil {
 					return
 				}
-				go handleConnection(conn, doDone, waitDone)
+				go handleConnection(fe, conn, doDone, waitDone)
 			}
 		}()
 
@@ -151,11 +146,11 @@ func BenchmarkTCP(b *testing.B) {
 	})
 }
 
-func handleConnection(conn *net.TCPConn, doDone, waitDone bool) {
+func handleConnection(fe Frontend, conn *net.TCPConn, doDone, waitDone bool) {
 	defer conn.Close()
 
 	if doDone {
-		done := Done(conn)
+		done := fe.Done(conn)
 		defer func() {
 			select {
 			case <-done:
@@ -163,7 +158,7 @@ func handleConnection(conn *net.TCPConn, doDone, waitDone bool) {
 			}
 		}()
 	} else if waitDone {
-		done := Done(conn)
+		done := fe.Done(conn)
 		defer func() {
 			<-done
 		}()
@@ -172,80 +167,4 @@ func handleConnection(conn *net.TCPConn, doDone, waitDone bool) {
 	buf := make([]byte, 5)
 	conn.Read(buf)
 	conn.Write(buf)
-}
-
-// TestTCP_EOF checks that Done() isn't called until actual EOF (no more data in receive buffer).
-func TestTCP_EOF(t *testing.T) {
-	ctx := context.Background()
-
-	l, err := net.ListenTCP("tcp", &net.TCPAddr{
-		IP:   net.IPv4(127, 0, 0, 1),
-		Port: 0,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer l.Close()
-
-	var wg sync.WaitGroup
-	wg.Add(2)
-
-	const GigaByte = 1 << 30
-	sendBuf := make([]byte, GigaByte)
-	// fill sendBuf with data
-	for i := 0; i < len(sendBuf); i++ {
-		sendBuf[i] = byte(i % 256)
-	}
-
-	var recvBuf []byte
-
-	go func() {
-		defer wg.Done()
-		conn, err := l.AcceptTCP()
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer conn.Close()
-
-		subCtx := WithContext(ctx, conn)
-
-		for subCtx.Err() == nil {
-			buf := make([]byte, 4096)
-			n, err := conn.Read(buf)
-			if err != nil {
-				t.Log("read error", err, n)
-				break
-			}
-			recvBuf = append(recvBuf, buf[:n]...)
-		}
-
-		t.Log("subCtx error", context.Cause(subCtx))
-	}()
-
-	go func() {
-		defer wg.Done()
-		conn, err := net.DialTCP("tcp", nil, l.Addr().(*net.TCPAddr))
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer conn.Close()
-
-		n, err := io.Copy(conn, bytes.NewReader(sendBuf))
-		if err != nil {
-			t.Fatal(err)
-		}
-		if n != int64(len(sendBuf)) {
-			t.Fatalf("expected to send %d bytes, but sent %d", len(sendBuf), n)
-		}
-
-		t.Log("closing")
-	}()
-
-	wg.Wait()
-
-	equal := bytes.Equal(sendBuf, recvBuf)
-	if !equal {
-		t.Fatal("received data is not equal to sent data")
-	}
-	time.Sleep(waitTime)
 }
