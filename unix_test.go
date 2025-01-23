@@ -41,6 +41,7 @@ func TestUnix(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+		defer conn.Close()
 
 		select {
 		case <-Done(conn):
@@ -57,8 +58,8 @@ func TestUnix(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-
 		defer conn.Close()
+
 		time.Sleep(waitTime)
 		t.Log("closing")
 	}()

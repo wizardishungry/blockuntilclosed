@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"math"
 	"os"
 	"sync"
 	"syscall"
@@ -117,19 +118,35 @@ func (kq *KQueue) Done(sconn syscall.RawConn, fd uintptr) <-chan struct{} {
 		return payload.c
 	}
 
-	eventsIn := [...]unix.Kevent_t{{
-		Ident:  uint64(fd),
-		Filter: unix.EVFILT_EXCEPT,
-		Flags: unix.EV_ADD |
-			unix.EV_ENABLE |
-			unix.EV_ONESHOT |
-			unix.EV_DISPATCH2 |
-			unix.EV_VANISHED |
-			unix.EV_RECEIPT,
-		Fflags: unix.NOTE_NONE,
-		Data:   0,
-		Udata:  nil,
-	}}
+	eventsIn := [...]unix.Kevent_t{
+		{ // EVFILT_EXCEPT is used to detect when the socket disconnects.
+			Ident:  uint64(fd),
+			Filter: unix.EVFILT_EXCEPT,
+			Flags: unix.EV_ADD |
+				unix.EV_ENABLE |
+				unix.EV_ONESHOT |
+				// unix.EV_DISPATCH2 |
+				// unix.EV_DISPATCH |
+				// unix.EV_VANISHED |
+				unix.EV_RECEIPT,
+			Fflags: unix.NOTE_NONE,
+			Data:   0,
+			Udata:  nil,
+		},
+		{ // EVFILT_READ is used to detect when the recv buffer is at EOF.
+			Ident:  uint64(fd),
+			Filter: unix.EVFILT_READ,
+			Flags: unix.EV_ADD |
+				unix.EV_ENABLE |
+				unix.EV_ONESHOT |
+				// unix.EV_DISPATCH2 |
+				// unix.EV_VANISHED |
+				unix.EV_RECEIPT,
+			Fflags: unix.NOTE_LOWAT | unix.NOTE_NONE,
+			Data:   math.MaxInt64,
+			Udata:  nil,
+		},
+	}
 
 	var eventsOut [1]unix.Kevent_t
 
@@ -165,7 +182,7 @@ RETRY_Kqueue:
 		Flags: unix.EV_ADD | // add the event
 			unix.EV_ENABLE | // enable the event
 			unix.EV_ONESHOT | // deliver this event only once
-			unix.EV_DISPATCH2 | // prereq for EV_VANISHED
+			unix.EV_DISPATCH2 | // prereq for EV_VANISHED?
 			unix.EV_VANISHED | // I believe necessary if the pipe is closed
 			unix.EV_RECEIPT, // do not receive only add
 		Fflags: unix.NOTE_NONE,
@@ -198,11 +215,13 @@ func (kq *KQueue) worker(cancelFD uintptr) {
 		}
 	}()
 
+	var (
+		eventsOut [1]unix.Kevent_t
+		// eventsIn  []unix.Kevent_t = make([]unix.Kevent_t, 0, 1)
+	)
 	for {
-
-		var events [1]unix.Kevent_t
 	RETRY:
-		n, err := unix.Kevent(kq.kqfd, nil, events[:], nil)
+		n, err := unix.Kevent(kq.kqfd, nil, eventsOut[:], nil)
 		if errors.Is(err, unix.EINTR) {
 			kq.logger.Print("pool kqueue EINTR")
 			goto RETRY
@@ -210,10 +229,11 @@ func (kq *KQueue) worker(cancelFD uintptr) {
 			kq.logger.Printf("poll unix.Kevent(): %v", err)
 			return
 		}
+		// eventsIn = eventsIn[:0] // reset slice
 
 		kq.logger.Print("kqueue events received ", n)
 
-		ev := &events[0]
+		ev := &eventsOut[0]
 
 		if ev.Ident == uint64(cancelFD) {
 			kq.logger.Print("cancelFD event")
@@ -222,7 +242,47 @@ func (kq *KQueue) worker(cancelFD uintptr) {
 
 		errorFlag := ev.Flags&unix.EV_ERROR != 0
 		eofFlag := ev.Flags&unix.EV_EOF != 0
-		kq.logger.Printf("event: %+v errorFlag=%v eofFlag=%v \n", ev, errorFlag, eofFlag)
+
+		var filterName string
+		switch ev.Filter {
+		case unix.EVFILT_READ:
+			filterName = "EVFILT_READ"
+		case unix.EVFILT_WRITE:
+			filterName = "EVFILT_WRITE"
+		case unix.EVFILT_AIO:
+			filterName = "EVFILT_AIO"
+		case unix.EVFILT_VNODE:
+			filterName = "EVFILT_VNODE"
+		case unix.EVFILT_PROC:
+			filterName = "EVFILT_PROC"
+		case unix.EVFILT_SIGNAL:
+			filterName = "EVFILT_SIGNAL"
+		case unix.EVFILT_TIMER:
+			filterName = "EVFILT_TIMER"
+		case unix.EVFILT_EXCEPT:
+			filterName = "EVFILT_EXCEPT"
+		default:
+			filterName = fmt.Sprintf("unknown filter %d", ev.Filter)
+		}
+
+		errno := unix.Errno(ev.Fflags)
+		kq.logger.Printf("event: %+v errorFlag=%v eofFlag=%v filterName=%v errno=%v\n", ev, errorFlag, eofFlag, filterName, errno)
+
+		if errorFlag {
+			kq.logger.Print("errorFlag, not closing")
+		}
+
+		if ev.Filter != unix.EVFILT_EXCEPT {
+			kq.logger.Print("not EVFILT_EXCEPT, not closing")
+			continue
+		}
+
+		// sigh, once the file descriptor is closed, we get an event with Data=0
+		// There is not a way to only get the event when the buffer is fully consumed.
+		if !eofFlag || ev.Data > 0 {
+			kq.logger.Print("!eofFlag || ev.Data > 0, not closing")
+			continue
+		}
 
 		closed := kq.m.Close(uintptr(ev.Ident))
 		kq.logger.Print("Close success=", closed)

@@ -71,9 +71,9 @@ func (fe *frontend) WithContext(ctx context.Context, conn Conn) context.Context 
 		done := fe.Done(conn)
 		select {
 		case <-done:
-			cancelCause(ErrConnClosed)
+			cancelCause(ErrConnClosed) // TODO: we could change Backend.Done to return a specific error for cancelCause
 		case <-ctx.Done():
-			cancelCause(ctx.Err())
+			cancelCause(context.Cause(ctx))
 		}
 	}()
 
