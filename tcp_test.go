@@ -83,12 +83,53 @@ func TestTCP(t *testing.T) {
 }
 
 func BenchmarkTCP(b *testing.B) {
-	test := func(b *testing.B, doDone, waitDone bool) {
+	b.Run("concurrency1", func(b *testing.B) {
+		benchmarkTCP(b, 1)
+	})
+	b.Run("concurrency10", func(b *testing.B) {
+		benchmarkTCP(b, 10)
+	})
+	b.Run("concurrency100", func(b *testing.B) {
+		benchmarkTCP(b, 100)
+	})
+	b.Run("concurrency1000", func(b *testing.B) {
+		benchmarkTCP(b, 1000)
+	})
+}
+
+func benchmarkTCP(b *testing.B, concurrencyFactor int) {
+	handleConnection := func(fe Frontend, conn *net.TCPConn, doDone, waitDone bool) {
+		defer conn.Close()
+
+		if doDone {
+			done := fe.Done(conn)
+			defer func() {
+				select {
+				case <-done:
+				default:
+				}
+			}()
+		} else if waitDone {
+			done := fe.Done(conn)
+			defer func() {
+				<-done
+			}()
+		}
+
+		buf := make([]byte, 5)
+		conn.Read(buf)
+		conn.Write(buf)
+	}
+
+	test := func(b *testing.B, doDone, waitDone bool, concurrencyFactor int) {
 		be := NewDefaultBackend()
-		logger := log.New(io.Discard, "", 0)
-		be.SetLogger(logger)
 		fe := WithBackend(be)
-		fe.SetLogger(logger)
+		logger := log.New(io.Discard, "", 0)
+		if false {
+			be.SetLogger(logger)
+			be.SetLogger(log.New(io.Discard, "", 0))
+			fe.SetLogger(logger)
+		}
 		b.ResetTimer()
 
 		// Start a TCP server
@@ -112,61 +153,50 @@ func BenchmarkTCP(b *testing.B) {
 			}
 		}()
 
+		c := make(chan struct{}, concurrencyFactor)
+		var wg sync.WaitGroup
+		wg.Add(concurrencyFactor)
 		// Run the benchmark
-		b.ResetTimer()
 
-		for b.Loop() {
-			conn, err := net.Dial("tcp", ln.Addr().String())
-			if err != nil {
-				b.Fatalf("failed to connect to TCP server: %v", err)
+		for i := 0; i < concurrencyFactor; i++ {
+			go func() {
+				defer wg.Done()
+				for range c {
+					conn, err := net.Dial("tcp", ln.Addr().String())
+					if err != nil {
+						b.Fatalf("failed to connect to TCP server: %v", err)
+					}
+
+					_, err = conn.Write([]byte("hello"))
+					if err != nil {
+						b.Fatalf("failed to write to TCP server: %v", err)
+					}
+
+					buf := make([]byte, 5)
+					_, err = conn.Read(buf)
+					if err != nil {
+						b.Fatalf("failed to read from TCP server: %v", err)
+					}
+					conn.Close()
+				}
+			}()
+			b.ResetTimer()
+			for b.Loop() {
+				c <- struct{}{}
 			}
-
-			_, err = conn.Write([]byte("hello"))
-			if err != nil {
-				b.Fatalf("failed to write to TCP server: %v", err)
-			}
-
-			buf := make([]byte, 5)
-			_, err = conn.Read(buf)
-			if err != nil {
-				b.Fatalf("failed to read from TCP server: %v", err)
-			}
-
-			conn.Close()
+			close(c)
+			wg.Wait()
 		}
 	}
 
 	b.Run("baseline", func(b *testing.B) {
-		test(b, false, false)
+		test(b, false, false, concurrencyFactor)
 	})
 
 	b.Run("doDone", func(b *testing.B) {
-		test(b, true, false)
+		test(b, true, false, concurrencyFactor)
 	})
 	b.Run("waitDone", func(b *testing.B) {
-		test(b, false, true)
+		test(b, false, true, concurrencyFactor)
 	})
-}
-
-func handleConnection(fe Frontend, conn *net.TCPConn, doDone, waitDone bool) {
-	defer conn.Close()
-
-	if doDone {
-		done := fe.Done(conn)
-		defer func() {
-			select {
-			case <-done:
-			default:
-			}
-		}()
-	} else if waitDone {
-		done := fe.Done(conn)
-		defer func() {
-			<-done
-		}()
-	}
-
-	buf := make([]byte, 5)
-	conn.Read(buf)
-	conn.Write(buf)
 }
