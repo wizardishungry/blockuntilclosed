@@ -47,28 +47,38 @@ func newFrontend(b Backend) *frontend {
 	}
 }
 
+var alwaysDone <-chan struct{} = func() <-chan struct{} {
+	ch := make(chan struct{})
+	close(ch)
+	return ch
+}()
+
 func (fe *frontend) Done(conn Conn) <-chan struct{} {
 	sconn, err := conn.SyscallConn()
 
 	if err != nil {
 		fe.logger.Printf("conn.SyscallConn(): %v", err)
-		return nil
+		return alwaysDone
 	}
 	var (
-		done <-chan struct{}
+		done   <-chan struct{}
+		dupErr error
 	)
 
 	if err := sconn.Control(func(fd uintptr) {
 		newFD, err := unix.Dup(int(fd))
 		if err != nil {
-			fe.logger.Printf("unix.Dup(): %v", err)
+			dupErr = err
 			return
 		}
-		// fe.logger.Printf("newFD: %d->%d", fd, newFD)
-
+		fe.logger.Printf("newFD: %d->%d", fd, newFD)
 		done = fe.backend.Done(newFD)
 	}); err != nil {
 		fe.logger.Printf("sconn.Control(): %v", err)
+		return alwaysDone
+	} else if dupErr != nil {
+		fe.logger.Printf("unix.Dup(): %v", dupErr)
+		return alwaysDone
 	}
 
 	return done

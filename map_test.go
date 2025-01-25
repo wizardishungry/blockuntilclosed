@@ -6,14 +6,13 @@ import (
 	"time"
 )
 
-func TestMapDeduped(t *testing.T) {
+type getMap interface {
+	getMap() *closeMap
+}
 
+func TestMapDeduped(t *testing.T) {
 	be := NewDefaultBackend()
 	fe := WithBackend(be)
-
-	type getMap interface {
-		getMap() *closeMap
-	}
 	beWithMap, ok := be.(getMap)
 
 	if !ok {
