@@ -1,13 +1,14 @@
 package blockuntilclosed
 
 import (
+	"context"
 	"log"
 	"sync"
 )
 
 // Backend is the interface for the platform-specific implementation of the package.
 type Backend interface {
-	Done(fd int) <-chan struct{}
+	WithFD(ctx context.Context, cancelCause context.CancelCauseFunc, fd int)
 	SetLogger(logger *log.Logger)
 	Close() error
 }

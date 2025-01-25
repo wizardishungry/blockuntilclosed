@@ -2,6 +2,7 @@ package blockuntilclosed
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"os"
 	"sync"
@@ -15,6 +16,7 @@ type Frontend interface {
 	Done(conn Conn) <-chan struct{}
 	WithContext(ctx context.Context, conn Conn) context.Context
 	SetLogger(logger *log.Logger)
+	Close() error
 }
 
 var (
@@ -54,52 +56,38 @@ var alwaysDone <-chan struct{} = func() <-chan struct{} {
 }()
 
 func (fe *frontend) Done(conn Conn) <-chan struct{} {
-	sconn, err := conn.SyscallConn()
-
-	if err != nil {
-		fe.logger.Printf("conn.SyscallConn(): %v", err)
-		return alwaysDone
-	}
-	var (
-		done   <-chan struct{}
-		dupErr error
-	)
-
-	if err := sconn.Control(func(fd uintptr) {
-		newFD, err := unix.Dup(int(fd))
-		if err != nil {
-			dupErr = err
-			return
-		}
-		fe.logger.Printf("newFD: %d->%d", fd, newFD)
-		done = fe.backend.Done(newFD)
-	}); err != nil {
-		fe.logger.Printf("sconn.Control(): %v", err)
-		return alwaysDone
-	} else if dupErr != nil {
-		fe.logger.Printf("unix.Dup(): %v", dupErr)
-		return alwaysDone
-	}
-
-	return done
+	return fe.WithContext(context.Background(), conn).Done()
 }
 
 func (fe *frontend) WithContext(ctx context.Context, conn Conn) context.Context {
 	ctx, cancelCause := context.WithCancelCause(ctx)
-	go func() {
-		defer cancelCause(nil)
-		done := fe.Done(conn)
-		select {
-		case <-done:
-			cancelCause(ErrConnClosed)
-		case <-ctx.Done():
-			cancelCause(context.Cause(ctx))
+
+	sconn, err := conn.SyscallConn()
+	if err != nil {
+		cancelCause(fmt.Errorf("%w: %w", ErrSyscallConn, err))
+		return ctx
+	}
+
+	if err := sconn.Control(func(fd uintptr) {
+		newFD, err := unix.Dup(int(fd))
+		if err != nil {
+			cancelCause(fmt.Errorf("%w: %w", ErrDup, err))
+			return
 		}
-	}()
+		fe.logger.Printf("newFD: %d->%d", fd, newFD)
+		// TODO: at this point we could call WithFD asynchronously and early return the context.
+		fe.backend.WithFD(ctx, cancelCause, newFD)
+	}); err != nil {
+		cancelCause(fmt.Errorf("%w: %w", ErrControl, err))
+	}
 
 	return ctx
 }
 
 func (fe *frontend) SetLogger(logger *log.Logger) {
 	fe.logger = logger
+}
+
+func (fe *frontend) Close() error {
+	return fe.backend.Close()
 }

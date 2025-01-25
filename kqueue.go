@@ -3,6 +3,7 @@
 package blockuntilclosed
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"log"
@@ -17,6 +18,10 @@ func init() {
 		return NewKQueue()
 	}
 }
+
+var (
+	ErrKeventAdd = errors.New("kevent add")
+)
 
 // KQueue is a Backend that uses kqueue(2) to block until a file descriptor is closed.
 // Do not initialize this struct directly, use NewKQueue instead.
@@ -95,28 +100,33 @@ func (kq *KQueue) Close() error {
 	return kq.closeOnce()
 }
 
-func (kq *KQueue) Done(fd int) <-chan struct{} {
+func (kq *KQueue) WithFD(ctx context.Context, cancelCause context.CancelCauseFunc, fd int) {
 	select {
 	case <-kq.allDone:
-		return nil
+		cancelCause(ErrBackendClosed)
+		return
 	default:
 	}
 
-	loaded, payload := kq.m.Add(fd)
+	loaded, payload := kq.m.Add(fd, ctx, cancelCause)
 	if payload == nil {
-		kq.logger.Print("nil payload; this is a problem")
-		return nil
+		cancelCause(ErrBackendMapAddNil)
+		return
 	}
 
-	if loaded && payload.c == nil {
-		kq.logger.Print("loaded and nil; this is a problem")
-		return nil
+	if loaded && payload.cancelCause == nil {
+		cancelCause(ErrBackendMapAddNoCancel)
+		return
 	}
 
 	if loaded {
-		// Already added
-		kq.logger.Print("Already added")
-		return payload.c
+		cancelCause(ErrBackEndMapAlreadyAdded)
+		return
+	}
+
+	// Replace context cancel with a call to Close that also.
+	cancelCause = func(err error) {
+		kq.m.Close(fd, err)
 	}
 
 	eventsIn := [...]unix.Kevent_t{
@@ -139,18 +149,24 @@ func (kq *KQueue) Done(fd int) <-chan struct{} {
 	var eventsOut [1]unix.Kevent_t
 
 RETRY:
+	select {
+	case <-kq.allDone:
+		cancelCause(ErrBackendClosed)
+	case <-ctx.Done():
+		return
+	default:
+	}
+
 	_, err := unix.Kevent(kq.kqfd, eventsIn[:], eventsOut[:], nil)
 	if errors.Is(err, unix.EINTR) {
 		kq.logger.Print("Done unix.Kevent EINTR")
 		goto RETRY
 	} else if err != nil {
-		kq.logger.Printf("Done unix.Kevent(): %v", err)
-		return nil
+		cancelCause(fmt.Errorf("%w: %w", ErrKeventAdd, err))
+		return
 	}
 
 	kq.logger.Print("Done success")
-
-	return payload.c
 }
 
 func (kq *KQueue) startKQueue() error {
@@ -266,7 +282,7 @@ func (kq *KQueue) worker(cancelFD uintptr) {
 			continue
 		}
 
-		closed := kq.m.Close(int(ev.Ident))
+		closed := kq.m.Close(int(ev.Ident), ErrConnClosed)
 		kq.logger.Print("Close success=", closed)
 	}
 }

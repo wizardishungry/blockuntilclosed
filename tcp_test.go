@@ -85,8 +85,10 @@ func TestTCP(t *testing.T) {
 func BenchmarkTCP(b *testing.B) {
 	test := func(b *testing.B, doDone, waitDone bool) {
 		be := NewDefaultBackend()
-		be.SetLogger(log.New(io.Discard, "", 0))
+		logger := log.New(io.Discard, "", 0)
+		be.SetLogger(logger)
 		fe := WithBackend(be)
+		fe.SetLogger(logger)
 		b.ResetTimer()
 
 		// Start a TCP server

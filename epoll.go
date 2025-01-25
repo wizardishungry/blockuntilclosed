@@ -3,7 +3,9 @@
 package blockuntilclosed
 
 import (
+	"context"
 	"errors"
+	"fmt"
 	"log"
 	"os"
 	"sync"
@@ -17,9 +19,12 @@ func init() {
 	}
 }
 
-// KQueue is a Backend that uses kqueue(2) to block until a file descriptor is closed.
+var (
+	ErrEpollCtl = errors.New("epoll ctl")
+)
+
+// Epoll is a Backend that uses epoll(7) to block until a file descriptor is closed.
 // Do not initialize this struct directly, use NewEpoll instead.
-// TODO read notes here https://stackoverflow.com/questions/70905227/epoll-does-not-signal-an-event-when-socket-is-close
 type Epoll struct {
 	logger              *log.Logger
 	m                   closeMap
@@ -104,7 +109,7 @@ RETRY:
 		ep.logger.Print("registerPipe unix.EpollCtl EINTR")
 		goto RETRY
 	} else if err != nil {
-		return err
+		return fmt.Errorf("%w: %w", ErrEpollCtl, err)
 	}
 	return nil
 }
@@ -142,35 +147,50 @@ func (ep *Epoll) worker(cancelFD int) {
 			return
 		}
 
-		closed := ep.m.Close(fd)
+		closed := ep.m.Close(fd, ErrConnClosed)
 		ep.logger.Printf("Close(%d): %v", fd, closed)
 	}
 }
 
-func (ep *Epoll) Done(fd int) <-chan struct{} {
+func (ep *Epoll) WithFD(ctx context.Context, cancelCause context.CancelCauseFunc, fd int) {
 	select {
 	case <-ep.allDone:
-		return nil
+		cancelCause(ErrBackendClosed)
+		return
 	default:
 	}
 
-	loaded, payload := ep.m.Add(fd)
+	loaded, payload := ep.m.Add(fd, ctx, cancelCause)
 	if payload == nil {
-		ep.logger.Print("nil payload; this is a problem")
-		return nil
+		cancelCause(ErrBackendMapAddNil)
+		return
 	}
 
-	if loaded && payload.c == nil {
-		ep.logger.Print("loaded and nil; this is a problem")
-		return nil
+	if loaded && payload.cancelCause == nil {
+		cancelCause(ErrBackendMapAddNoCancel)
+		return
 	}
 
 	if loaded {
-		// Already added
-		return payload.c
+		cancelCause(ErrBackEndMapAlreadyAdded)
+		return
+	}
+
+	// Replace context cancel with a call to Close that also.
+	cancelCause = func(err error) {
+		ep.m.Close(fd, err)
 	}
 
 RETRY:
+	select {
+	case <-ep.allDone:
+		cancelCause(ErrBackendClosed)
+		return
+	case <-ctx.Done():
+		return
+	default:
+	}
+
 	if err := unix.EpollCtl(ep.epollFD, unix.EPOLL_CTL_ADD, int(fd), &unix.EpollEvent{
 		Events: unix.EPOLLIN | unix.EPOLLRDHUP | unix.EPOLLONESHOT | unix.EPOLLERR,
 		Fd:     int32(fd),
@@ -178,11 +198,9 @@ RETRY:
 		ep.logger.Print("Done unix.EpollCtl EINTR")
 		goto RETRY
 	} else if err != nil {
-		ep.logger.Printf("unix.EpollCtl(): %v", err)
-		return nil
+		cancelCause(fmt.Errorf("%w: %w", ErrEpollCtl, err))
+		return
 	}
 
 	ep.logger.Printf("Done(): added %d", fd)
-
-	return payload.c
 }

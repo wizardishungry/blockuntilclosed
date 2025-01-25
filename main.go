@@ -13,7 +13,17 @@ var _ syscall.Conn = (*net.TCPConn)(nil)
 
 // package scope errors may extracted from canceled contexts using [context.Cause].
 var (
-	ErrConnClosed = errors.New("conn closed")
+	ErrConnClosed    = errors.New("conn closed")
+	ErrBackendClosed = errors.New("backend closed")
+
+	// remarkable errors
+	ErrSyscallConn            = errors.New("conn.SyscallConn() failed")
+	ErrControl                = errors.New("sconn.Control() failed")
+	ErrDup                    = errors.New("unix.Dup() failed")
+	ErrBackendMapAddNil       = errors.New("adding to closeMap returned nil")
+	ErrBackendMapAddNoCancel  = errors.New("adding to closeMap returned nil cancel")
+	ErrBackEndMapAlreadyAdded = errors.New("adding to closeMap returned already added")
+	ErrUnixCloseDup           = errors.New("unix.Close() failed to close dup'd file descriptor")
 )
 
 type Conn interface {

@@ -1,7 +1,9 @@
 package blockuntilclosed
 
 import (
-	"log"
+	"context"
+	"errors"
+	"fmt"
 	"sync"
 
 	"golang.org/x/sys/unix"
@@ -12,34 +14,50 @@ type closeMap struct {
 }
 
 type closeMapPayload struct {
-	c chan struct{}
+	cancelCause context.CancelCauseFunc
+	stop        func() bool
 }
 
-func (cm *closeMap) Close(key int) bool {
+func (payload *closeMapPayload) Close(key int, reason error) {
+	err := unix.Close(key) // Close the dup'd file descriptor
+	if err != nil {
+		err := fmt.Errorf("%w: %w", ErrUnixCloseDup, err)
+		reason = errors.Join(reason, err)
+	}
+
+	if payload.stop != nil {
+		// call stop before canceling the context so the AfterFunc doesn't get called.
+		payload.stop()
+	}
+
+	payload.cancelCause(reason)
+}
+
+func (cm *closeMap) Close(key int, reason error) bool {
 	v, loaded := cm.m.LoadAndDelete(key)
 	if !loaded {
 		return false
 	}
 	if payload, ok := v.(*closeMapPayload); ok {
-		close(payload.c)
-
-		err := unix.Close(key) // Close the dup'd file descriptor
-		if err != nil {
-			log.Printf("unix.Close(%d): %v", key, err) // TODO: inject logger
-		}
-
+		payload.Close(key, reason)
 		return true
 	}
 	return false // May have already been closed. But how?
 }
 
-func (cm *closeMap) Add(key int) (loaded bool, _ *closeMapPayload) {
-	c := make(chan struct{})
+func (cm *closeMap) Add(key int, ctx context.Context, cancelCause context.CancelCauseFunc) (loaded bool, _ *closeMapPayload) {
 	payload := &closeMapPayload{
-		c: c,
+		cancelCause: cancelCause,
 	}
 	v, loaded := cm.m.LoadOrStore(key, payload)
 	if !loaded {
+		// This is a goroutine. It is not ideal.
+		// The happy path deschedules it.
+		stop := context.AfterFunc(ctx, func() {
+			cm.Close(key, context.Cause(ctx))
+		})
+		payload.stop = stop
+
 		return false, payload
 	}
 	if p, ok := v.(*closeMapPayload); ok {
@@ -51,7 +69,7 @@ func (cm *closeMap) Add(key int) (loaded bool, _ *closeMapPayload) {
 
 func (cm *closeMap) Drain() (count int) {
 	cm.m.Range(func(key, value interface{}) bool {
-		closed := cm.Close(key.(int))
+		closed := cm.Close(key.(int), ErrBackendClosed)
 		if closed {
 			count++
 		}
