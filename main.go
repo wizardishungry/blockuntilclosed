@@ -24,9 +24,11 @@ var (
 	ErrUnixCloseDup           = errors.New("unix.Close() failed to close dup'd file descriptor")
 )
 
+// Conn represents a socket connection.
+// Although we only use the methods from syscall.Conn, we embed net.Conn to forbid the use of *os.File.
 type Conn interface {
 	syscall.Conn
-	// net.Conn // TODO: This should be constrained on mac because we don't know how to do this for os.File.
+	net.Conn
 }
 
 // Done blocks until a file descriptor is closed.

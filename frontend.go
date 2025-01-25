@@ -70,7 +70,7 @@ func (fe *frontend) WithContext(ctx context.Context, conn Conn) context.Context 
 		}
 		fe.logger.Printf("newFD: %d->%d", fd, newFD)
 		// TODO: at this point we could call WithFD asynchronously and early return the context.
-		go fe.backend.WithFD(ctx, cancelCause, newFD)
+		fe.backend.WithFD(ctx, cancelCause, newFD)
 	}); err != nil {
 		cancelCause(fmt.Errorf("%w: %w", ErrControl, err))
 	}
