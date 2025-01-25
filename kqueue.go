@@ -3,12 +3,9 @@
 package blockuntilclosed
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"log"
-	"os"
-	"sync"
 
 	"golang.org/x/sys/unix"
 )
@@ -23,7 +20,7 @@ var (
 	ErrKeventAdd = errors.New("kevent add")
 )
 
-// KQueue is a Backend that uses kqueue(2) to block until a file descriptor is closed.
+// kqueue is a MultiplexBackend that uses kqueue(2) to block until a file descriptor is closed.
 // Do not initialize this struct directly, use NewKQueue instead.
 //
 // Cribbed from
@@ -42,145 +39,50 @@ var (
 //				the   monitored	  file,	   was
 //				closed.	  The  closed file de-
 //				scriptor had write access.
-type KQueue struct {
-	pipeRead, pipeWrite *os.File
-	logger              *log.Logger
-	kqfd                int
-	closeOnce           func() error
-	allDone             chan struct{}
-	m                   closeMap
+
+// NewKQueue creates a new instance of KQueue.
+func NewKQueue() *MultiplexBackend {
+	return NewMultiplexBackend(&kqueue{})
 }
 
-// NewKQueue returns a new KQueue instance.
-func NewKQueue() *KQueue {
-	logger := log.New(os.Stderr, "KQueue: ", log.LstdFlags)
-
-	pipeRead, pipeWrite, err := os.Pipe()
-	if err != nil {
-		logger.Fatalf("os.Pipe(): %v", err)
-	}
-
-	kq := &KQueue{
-		pipeRead:  pipeRead,
-		pipeWrite: pipeWrite,
-		logger:    logger,
-		allDone:   make(chan struct{}),
-		closeOnce: nil,
-		m:         closeMap{},
-	}
-	kq.closeOnce = sync.OnceValue(kq.close)
-
-	if err := kq.startKQueue(); err != nil {
-		logger.Fatalf("kq.startKQueue(): %v", err)
-	}
-
-	return kq
+type kqueue struct {
+	logger *log.Logger
 }
 
-func (kq *KQueue) SetLogger(logger *log.Logger) {
+func (kq *kqueue) SetLogger(logger *log.Logger) {
 	kq.logger = logger
 }
 
-func (kq *KQueue) getMap() *closeMap {
-	return &kq.m
-}
-
-func (kq *KQueue) close() error {
-	err := errors.Join(
-		kq.pipeRead.Close(),
-		kq.pipeWrite.Close(),
+func (kq *kqueue) Subscribe(pollfd, fd int) error {
+	var (
+		eventsIn = [...]unix.Kevent_t{
+			{ // EVFILT_EXCEPT is used to detect when the socket disconnects.
+				Ident:  uint64(fd),
+				Filter: unix.EVFILT_EXCEPT,
+				Flags: unix.EV_ADD |
+					unix.EV_ENABLE |
+					unix.EV_ONESHOT |
+					unix.EV_DISPATCH2 |
+					// unix.EV_DISPATCH |
+					unix.EV_VANISHED |
+					unix.EV_RECEIPT,
+				Fflags: unix.NOTE_NONE,
+				Data:   0,
+				Udata:  nil,
+			},
+		}
+		eventsOut [1]unix.Kevent_t
 	)
-	<-kq.allDone
-	count := kq.m.Drain()
-	kq.logger.Printf("Drain(): %d", count)
+
+	_, err := unix.Kevent(pollfd, eventsIn[:], eventsOut[:], nil)
 	return err
 }
 
-func (kq *KQueue) Close() error {
-	return kq.closeOnce()
-}
-
-func (kq *KQueue) WithFD(ctx context.Context, cancelCause context.CancelCauseFunc, fd int) {
-	select {
-	case <-kq.allDone:
-		cancelCause(ErrBackendClosed)
-		return
-	default:
-	}
-
-	loaded, payload := kq.m.Add(fd, ctx, cancelCause)
-	if payload == nil {
-		cancelCause(ErrBackendMapAddNil)
-		return
-	}
-
-	if loaded && payload.cancelCause == nil {
-		cancelCause(ErrBackendMapAddNoCancel)
-		return
-	}
-
-	if loaded {
-		cancelCause(ErrBackEndMapAlreadyAdded)
-		return
-	}
-
-	// Replace context cancel with a call to Close that also.
-	cancelCause = func(err error) {
-		kq.m.Close(fd, err)
-	}
-
-	eventsIn := [...]unix.Kevent_t{
-		{ // EVFILT_EXCEPT is used to detect when the socket disconnects.
-			Ident:  uint64(fd),
-			Filter: unix.EVFILT_EXCEPT,
-			Flags: unix.EV_ADD |
-				unix.EV_ENABLE |
-				unix.EV_ONESHOT |
-				unix.EV_DISPATCH2 |
-				// unix.EV_DISPATCH |
-				unix.EV_VANISHED |
-				unix.EV_RECEIPT,
-			Fflags: unix.NOTE_NONE,
-			Data:   0,
-			Udata:  nil,
-		},
-	}
-
-	var eventsOut [1]unix.Kevent_t
-
-RETRY:
-	select {
-	case <-kq.allDone:
-		cancelCause(ErrBackendClosed)
-	case <-ctx.Done():
-		return
-	default:
-	}
-
-	_, err := unix.Kevent(kq.kqfd, eventsIn[:], eventsOut[:], nil)
-	if errors.Is(err, unix.EINTR) {
-		kq.logger.Print("Done unix.Kevent EINTR")
-		goto RETRY
-	} else if err != nil {
-		cancelCause(fmt.Errorf("%w: %w", ErrKeventAdd, err))
-		return
-	}
-
-	kq.logger.Print("Done success")
-}
-
-func (kq *KQueue) startKQueue() error {
-RETRY_Kqueue:
+func (kq *kqueue) Start(cancelFD int) (int, error) {
 	kqfd, err := unix.Kqueue()
-	if errors.Is(err, unix.EINTR) {
-		kq.logger.Print("startKQueue unix.Kqueue EINTR")
-		goto RETRY_Kqueue
-	} else if err != nil {
-		return fmt.Errorf("unix.Kqueue(): %w", err)
+	if err != nil {
+		return -1, fmt.Errorf("unix.Kqueue(): %w", err)
 	}
-
-	kq.kqfd = kqfd
-	cancelFD := kq.pipeRead.Fd()
 
 	eventsIn := [...]unix.Kevent_t{{
 		Ident:  uint64(cancelFD),
@@ -198,91 +100,54 @@ RETRY_Kqueue:
 
 	var eventsOut [1]unix.Kevent_t
 
-RETRY_Kevent:
 	_, err = unix.Kevent(kqfd, eventsIn[:], eventsOut[:], nil)
-	if errors.Is(err, unix.EINTR) {
-		kq.logger.Print("startup unix.Kevent EINTR")
-		goto RETRY_Kevent
-	} else if err != nil {
-		return fmt.Errorf("startup unix.Kevent(): %w", err)
+	if err != nil {
+		return kqfd, fmt.Errorf("startup unix.Kevent(): %w", err)
 	}
 
-	go kq.worker(cancelFD)
-
-	return nil
+	return kqfd, nil
 }
 
-func (kq *KQueue) worker(cancelFD uintptr) {
-	defer close(kq.allDone)
-	defer func() {
-		err := unix.Close(kq.kqfd)
-		if err != nil {
-			kq.logger.Printf("worker unix.Close(): %v", err)
-		}
-	}()
-
+func (kq *kqueue) Recv(pollFD int) (fd int, isClose bool, _ error) {
 	var (
 		eventsOut [1]unix.Kevent_t
 	)
-	for {
-	RETRY:
-		n, err := unix.Kevent(kq.kqfd, nil, eventsOut[:], nil)
-		if errors.Is(err, unix.EINTR) {
-			kq.logger.Print("pool kqueue EINTR")
-			goto RETRY
-		} else if err != nil {
-			kq.logger.Printf("poll unix.Kevent(): %v", err)
-			return
-		}
-
-		kq.logger.Print("kqueue events received ", n)
-
-		ev := &eventsOut[0]
-
-		if ev.Ident == uint64(cancelFD) {
-			kq.logger.Print("cancelFD event")
-			return
-		}
-
-		errorFlag := ev.Flags&unix.EV_ERROR != 0
-		eofFlag := ev.Flags&unix.EV_EOF != 0
-
-		var filterName string
-		switch ev.Filter {
-		case unix.EVFILT_READ:
-			filterName = "EVFILT_READ"
-		case unix.EVFILT_WRITE:
-			filterName = "EVFILT_WRITE"
-		case unix.EVFILT_AIO:
-			filterName = "EVFILT_AIO"
-		case unix.EVFILT_VNODE:
-			filterName = "EVFILT_VNODE"
-		case unix.EVFILT_PROC:
-			filterName = "EVFILT_PROC"
-		case unix.EVFILT_SIGNAL:
-			filterName = "EVFILT_SIGNAL"
-		case unix.EVFILT_TIMER:
-			filterName = "EVFILT_TIMER"
-		case unix.EVFILT_EXCEPT:
-			filterName = "EVFILT_EXCEPT"
-		default:
-			filterName = fmt.Sprintf("unknown filter %d", ev.Filter)
-		}
-
-		errno := unix.Errno(ev.Fflags)
-		kq.logger.Printf("event: %+v errorFlag=%v eofFlag=%v filterName=%v errno=%v\n", ev, errorFlag, eofFlag, filterName, errno)
-
-		if errorFlag {
-			kq.logger.Print("errorFlag, not closing")
-			continue
-		}
-
-		if ev.Filter != unix.EVFILT_EXCEPT {
-			kq.logger.Print("not EVFILT_EXCEPT, not closing")
-			continue
-		}
-
-		closed := kq.m.Close(int(ev.Ident), ErrConnClosed)
-		kq.logger.Print("Close success=", closed)
+	n, err := unix.Kevent(pollFD, nil, eventsOut[:], nil)
+	if err != nil {
+		return -1, false, fmt.Errorf("poll unix.Kevent(): %w", err)
 	}
+
+	kq.logger.Print("kqueue events received ", n)
+
+	ev := &eventsOut[0]
+
+	errorFlag := ev.Flags&unix.EV_ERROR != 0
+	eofFlag := ev.Flags&unix.EV_EOF != 0
+
+	var filterName string
+	switch ev.Filter {
+	case unix.EVFILT_READ:
+		filterName = "EVFILT_READ"
+	case unix.EVFILT_WRITE:
+		filterName = "EVFILT_WRITE"
+	case unix.EVFILT_AIO:
+		filterName = "EVFILT_AIO"
+	case unix.EVFILT_VNODE:
+		filterName = "EVFILT_VNODE"
+	case unix.EVFILT_PROC:
+		filterName = "EVFILT_PROC"
+	case unix.EVFILT_SIGNAL:
+		filterName = "EVFILT_SIGNAL"
+	case unix.EVFILT_TIMER:
+		filterName = "EVFILT_TIMER"
+	case unix.EVFILT_EXCEPT:
+		filterName = "EVFILT_EXCEPT"
+	default:
+		filterName = fmt.Sprintf("unknown filter %d", ev.Filter)
+	}
+
+	errno := unix.Errno(ev.Fflags)
+	kq.logger.Printf("event: %+v errorFlag=%v eofFlag=%v filterName=%v errno=%v\n", ev, errorFlag, eofFlag, filterName, errno)
+
+	return int(ev.Ident), true, nil
 }

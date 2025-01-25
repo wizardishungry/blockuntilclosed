@@ -49,12 +49,6 @@ func newFrontend(b Backend) *frontend {
 	}
 }
 
-var alwaysDone <-chan struct{} = func() <-chan struct{} {
-	ch := make(chan struct{})
-	close(ch)
-	return ch
-}()
-
 func (fe *frontend) Done(conn Conn) <-chan struct{} {
 	return fe.WithContext(context.Background(), conn).Done()
 }
@@ -76,7 +70,7 @@ func (fe *frontend) WithContext(ctx context.Context, conn Conn) context.Context 
 		}
 		fe.logger.Printf("newFD: %d->%d", fd, newFD)
 		// TODO: at this point we could call WithFD asynchronously and early return the context.
-		fe.backend.WithFD(ctx, cancelCause, newFD)
+		go fe.backend.WithFD(ctx, cancelCause, newFD)
 	}); err != nil {
 		cancelCause(fmt.Errorf("%w: %w", ErrControl, err))
 	}

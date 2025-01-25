@@ -13,10 +13,8 @@ var _ syscall.Conn = (*net.TCPConn)(nil)
 
 // package scope errors may extracted from canceled contexts using [context.Cause].
 var (
-	ErrConnClosed    = errors.New("conn closed")
-	ErrBackendClosed = errors.New("backend closed")
-
-	// remarkable errors
+	ErrConnClosed             = errors.New("conn closed")
+	ErrBackendClosed          = errors.New("backend closed")
 	ErrSyscallConn            = errors.New("conn.SyscallConn() failed")
 	ErrControl                = errors.New("sconn.Control() failed")
 	ErrDup                    = errors.New("unix.Dup() failed")
