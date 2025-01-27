@@ -29,7 +29,10 @@ func TestHTTPServer(t *testing.T) {
 	wg.Add(1)
 	srv := httptest.NewServer(h)
 	srv.Config.ConnContext = func(ctx context.Context, c net.Conn) context.Context {
-		syscallConn, ok := c.(syscall.Conn)
+		syscallConn, ok := c.(interface {
+			syscall.Conn
+			net.Conn
+		})
 		if !ok {
 			t.Fatal("not a syscall.Conn")
 			return ctx
@@ -103,7 +106,6 @@ func TestHTTPServer(t *testing.T) {
 
 	wg.Wait()
 	t.Log("done")
-
 }
 
 type slowBody struct {

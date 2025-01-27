@@ -124,12 +124,12 @@ func benchmarkTCP(b *testing.B, concurrencyFactor int) {
 	test := func(b *testing.B, doDone, waitDone bool, concurrencyFactor int) {
 		be := NewDefaultBackend()
 		fe := WithBackend(be)
+		b.Cleanup(func() { be.Close() })
+
 		logger := log.New(io.Discard, "", 0)
-		if false {
-			be.SetLogger(logger)
-			be.SetLogger(log.New(io.Discard, "", 0))
-			fe.SetLogger(logger)
-		}
+		be.SetLogger(logger)
+		be.SetLogger(log.New(io.Discard, "", 0))
+		fe.SetLogger(logger)
 		b.ResetTimer()
 
 		// Start a TCP server
@@ -142,51 +142,54 @@ func benchmarkTCP(b *testing.B, concurrencyFactor int) {
 		}
 		defer ln.Close()
 
-		// Accept connections in a separate goroutine
-		go func() {
-			for {
-				conn, err := ln.AcceptTCP()
-				if err != nil {
-					return
-				}
-				go handleConnection(fe, conn, doDone, waitDone)
-			}
-		}()
-
 		c := make(chan struct{}, concurrencyFactor)
 		var wg sync.WaitGroup
 		wg.Add(concurrencyFactor)
-		// Run the benchmark
-
-		for i := 0; i < concurrencyFactor; i++ {
+		for range concurrencyFactor {
+			go func() {
+				for {
+					conn, err := ln.AcceptTCP()
+					if err != nil {
+						return
+					}
+					handleConnection(fe, conn, doDone, waitDone)
+				}
+			}()
 			go func() {
 				defer wg.Done()
 				for range c {
-					conn, err := net.Dial("tcp", ln.Addr().String())
-					if err != nil {
-						b.Fatalf("failed to connect to TCP server: %v", err)
-					}
+					func() {
+						conn, err := net.Dial("tcp", ln.Addr().String())
+						if err != nil {
+							b.Fatalf("failed to connect to TCP server: %v", err)
+						}
+						defer conn.Close()
 
-					_, err = conn.Write([]byte("hello"))
-					if err != nil {
-						b.Fatalf("failed to write to TCP server: %v", err)
-					}
+						_, err = conn.Write([]byte("hello"))
+						if err != nil {
+							b.Fatalf("failed to write to TCP server: %v", err)
+						}
 
-					buf := make([]byte, 5)
-					_, err = conn.Read(buf)
-					if err != nil {
-						b.Fatalf("failed to read from TCP server: %v", err)
-					}
-					conn.Close()
+						buf := make([]byte, 5)
+						_, err = conn.Read(buf)
+						if err != nil {
+							b.Fatalf("failed to read from TCP server: %v", err)
+						}
+						conn.Close()
+					}()
 				}
 			}()
-			b.ResetTimer()
-			for b.Loop() {
-				c <- struct{}{}
-			}
-			close(c)
-			wg.Wait()
 		}
+
+		b.ResetTimer()
+		// Run the benchmark
+		for b.Loop() {
+			c <- struct{}{}
+		}
+		close(c)
+		b.Log("waiting for done")
+		wg.Wait()
+		b.Log("done")
 	}
 
 	b.Run("baseline", func(b *testing.B) {
