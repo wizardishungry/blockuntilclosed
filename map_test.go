@@ -12,7 +12,7 @@ type getMap interface {
 
 func TestMapDeduped(t *testing.T) {
 	be := NewDefaultBackend()
-	fe := WithBackend(be)
+	fe := NewFrontend(be)
 	beWithMap, ok := be.(getMap)
 
 	if !ok {

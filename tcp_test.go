@@ -98,7 +98,7 @@ func BenchmarkTCP(b *testing.B) {
 }
 
 func benchmarkTCP(b *testing.B, concurrencyFactor int) {
-	handleConnection := func(fe Frontend, conn *net.TCPConn, doDone, waitDone bool) {
+	handleConnection := func(fe FrontendSingleton, conn *net.TCPConn, doDone, waitDone bool) {
 		defer conn.Close()
 
 		if doDone {
@@ -123,7 +123,7 @@ func benchmarkTCP(b *testing.B, concurrencyFactor int) {
 
 	test := func(b *testing.B, doDone, waitDone bool, concurrencyFactor int) {
 		be := NewDefaultBackend()
-		fe := WithBackend(be)
+		fe := NewFrontend(be)
 		b.Cleanup(func() { be.Close() })
 
 		logger := log.New(io.Discard, "", 0)

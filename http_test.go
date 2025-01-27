@@ -15,7 +15,7 @@ import (
 // TestHTTPServer tests that a slow body will be interrupted when the client closes the connection.
 // This was designed for fasthttp, golang net/http works fine with the request context.
 func TestHTTPServer(t *testing.T) {
-	fe := WithBackend(NewDefaultBackend())
+	fe := NewFrontend(NewDefaultBackend())
 
 	inHandler := false
 	h := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

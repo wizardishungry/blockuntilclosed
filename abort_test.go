@@ -70,7 +70,7 @@ func TestAbort(t *testing.T) {
 // - Not leak a map entry with a file descriptor.
 func TestAlreadyClosed(t *testing.T) {
 	be := NewDefaultBackend()
-	fe := WithBackend(be)
+	fe := NewFrontend(be)
 	beWithMap, ok := be.(getMap)
 
 	if !ok {

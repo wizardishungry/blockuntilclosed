@@ -19,7 +19,7 @@ func TestKqueueClose(t *testing.T) {
 
 func TestKqueueDoStuffAndClose(t *testing.T) {
 	kq := NewKQueue()
-	fe := WithBackend(kq)
+	fe := NewFrontend(kq)
 
 	l, err := net.ListenTCP("tcp", &net.TCPAddr{
 		IP:   net.IPv4(127, 0, 0, 1),
@@ -63,5 +63,4 @@ func TestKqueueDoStuffAndClose(t *testing.T) {
 	}()
 
 	wg.Wait()
-
 }
